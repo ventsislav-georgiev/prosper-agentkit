@@ -47,6 +47,19 @@ PTY='(^|[;&|`]|\$\(|(^|[^A-Za-z0-9_])(nohup|exec|sudo|xargs|time))[[:space:]({!]
 here=$(cd "$(dirname "$0")" && pwd)
 wd=$(cd "$here/../tools/prodguard" 2>/dev/null && pwd)   # the wrapper files
 sd=${KIT_BIN:-$wd}   # where the deny text sends the agent
+# prodguard.conf's [trusted-shim-dirs]: absolute dirs whose cloud CLIs are guarded shims of another
+# origin (an operator's own prodguard). A tool found there counts as guarded, like the kit's shims.
+conf=${KIT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/prodguard}/prodguard.conf
+TRUSTED=$(awk '{ sub(/^[ \t]+/, ""); sub(/[ \t\r]+$/, "") }
+  /^\[.*\]$/ { t = ($0 == "[trusted-shim-dirs]"); next } t && $0 != "" && !/^[#;]/' "$conf" 2>/dev/null)
+trusted_dir() {
+  local x
+  while IFS= read -r x; do
+    x=${x/#\~\//$HOME/}
+    [[ $x == /* && $1 -ef $x ]] && return 0
+  done <<<"$TRUSTED"
+  return 1
+}
 # The shims themselves are fine by path: $KIT_BIN/ becomes a word no pattern here reads as a path or a command.
 if [[ -n ${KIT_BIN:-} ]]; then
   c=$(LC_ALL=C awk -v p="$KIT_BIN/" '{ while ((i = index($0, p)) > 0) $0 = substr($0, 1, i - 1) "prodguard-shim/" substr($0, i + length(p)); print }' <<<"$cmd")
@@ -95,7 +108,7 @@ shadows() {
       d=${d/#\~/$HOME}; d=${d//'${HOME}'/$HOME}; d=${d//'$HOME'/$HOME}
       [[ $d == /* && $d != *[\$\`]* ]] || return 0
       for t in kubectl gcloud aws terraform tofu; do
-        [[ -x $d/$t && ! $d -ef $sd && ! $d -ef $wd ]] && return 0
+        [[ -x $d/$t && ! $d -ef $sd && ! $d -ef $wd ]] && ! trusted_dir "$d" && return 0
       done
     done
     [[ -n $keep ]] || return 0
@@ -103,12 +116,13 @@ shadows() {
   return 1
 }
 
-# Sets u to the tools that, run by name, miss prodguard. The hook shares the session's PATH, and a
-# session started from a shell older than the shims' PATH line runs the real binary by name.
+# Sets u to the tools that, run by name, miss prodguard (the kit's shims or a trusted foreign one).
+# The hook shares the session's PATH, and a session started from a shell older than the shims' PATH
+# line runs the real binary by name.
 unguarded() {
   local x p; u=
   for x in kubectl gcloud aws terraform tofu; do
-    p=$(command -v $x) && [[ ! $p -ef $sd/$x && ! $p -ef $wd/$x ]] && u+=" $x "
+    p=$(command -v $x) && [[ ! $p -ef $sd/$x && ! $p -ef $wd/$x ]] && ! trusted_dir "${p%/*}" && u+=" $x "
   done
 }
 

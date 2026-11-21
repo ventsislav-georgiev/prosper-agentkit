@@ -3,7 +3,7 @@ id          = "io.github.ventsislav-georgiev.prosper-agentkit"
 name        = "prosper-agentkit"
 title       = "Prosper Agent Kit"
 description = "Guard hooks, safe defaults and named workers for Claude Code."
-version     = "0.2.0"
+version     = "0.2.1"
 author      = "Ventsislav Georgiev"
 license     = "MIT"
 

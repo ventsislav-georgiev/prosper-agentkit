@@ -6,6 +6,8 @@
 # One entry per line; # starts a comment. The sections only group the entries: every entry counts the same way.
 # An entry matches as a whole word in the command and its resolved target (letters, digits and - around it are
 # part of the word), so acme-prod does not match acme-prod-staging, while gke_acme-prod_zone_x does.
+# A * stands for any run of those word characters: *-production matches every name ending in -production
+# (acme-logs-production, x-1-production), but not acme-logs-production-old.
 # Reads always pass; a write whose target matches is refused (exit 77), and so is a write whose target cannot be told.
 
 [gcp-projects]
@@ -28,3 +30,8 @@ acme-prod-admin
 # Workspace names (TF_WORKSPACE or the selected one), TF_VAR_project values, state prefixes or bucket names.
 [terraform-workspaces]
 production
+
+# Not production: absolute dirs (~/ allowed) whose kubectl, gcloud, aws, terraform or tofu are guarded shims of another
+# origin, such as your own prodguard. A tool found there first on PATH counts as guarded, so the kit hook allows it by
+# name. Empty by default; list only a dir whose shims refuse production writes themselves.
+[trusted-shim-dirs]

@@ -1,4 +1,3 @@
-<!-- DRAFT for operator approval: written fresh for the kit; not yet approved. -->
 # Named workers
 
 This kit installs eight worker agents: `worker-haiku`, `worker-sonnet-low`, `worker-sonnet-medium` and

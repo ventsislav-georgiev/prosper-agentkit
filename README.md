@@ -142,7 +142,10 @@ poll every 5 minutes or less and exit when the subject reaches an end state.
   `~/.config/removeguard/config` instead, and so do they under the kit when `removeguard.conf` is missing.
 - prodguard: copy `prodguard.conf.example` to `prodguard.conf` in the kit's config folder and list your production
   GCP projects and project numbers, cluster endpoints, AWS profiles and account ids, and terraform workspaces, one per
-  line. Outside the kit prodguard reads `~/.config/prodguard/prodguard.conf`.
+  line. A `*` in an entry stands for any run of letters, digits and `-`, so `*-production` covers every name ending in
+  `-production`. If you run your own guarded shims, list their absolute folders under `[trusted-shim-dirs]`: a cloud
+  CLI found there first on PATH counts as guarded, so the hook allows it by name. Outside the kit prodguard reads
+  `~/.config/prodguard/prodguard.conf`.
 - Kit settings on the install sheet: `ai_reviewer` is the login of a review bot that re-reviews only on a push or an
   `/ai-review` comment, so `pr-watch.sh` names that comment instead of a re-review request. `actions_status_url` is
   the GitHub status page's `components.json` API address; with it `pr-watch.sh` holds retriggers during an Actions

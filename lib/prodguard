@@ -20,11 +20,15 @@
 # workspaces, state prefixes or buckets. An entry matches as a whole word: letters, digits and -
 # around it count as part of the word, so acme-prod does not match acme-prod-staging, while
 # gke_acme-prod_zone_x and projects/acme-prod/... do match. An entry holding a blank is skipped.
+# A * in an entry stands for any run of those word characters, so *-production matches every
+# bucket or project ending in -production. The [trusted-shim-dirs] section is not production: it
+# lists absolute dirs whose cloud CLIs are guarded shims of another origin (see trusted_dir).
 conf=${KIT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/prodguard}/prodguard.conf
 PROD_RE=$(awk '
   { sub(/^[ \t]+/, ""); sub(/[ \t\r]+$/, "") }
-  $0 == "" || /^[#;]/ || /^\[.*\]$/ || /[ \t]/ { next }
-  { gsub(/[][\\.^$*+?(){}|\/]/, "\\\\&"); out = out (out == "" ? "" : "|") $0 }
+  /^\[.*\]$/ { trusted = ($0 == "[trusted-shim-dirs]"); next }
+  trusted || $0 == "" || /^[#;]/ || /[ \t]/ { next }
+  { gsub(/[][\\.^$+?(){}|\/]/, "\\\\&"); gsub(/\*/, "[A-Za-z0-9-]*"); out = out (out == "" ? "" : "|") $0 }
   END { print out }' "$conf" 2>/dev/null)
 [[ -n $PROD_RE ]] && PROD_RE="(^|[^A-Za-z0-9-])($PROD_RE)([^A-Za-z0-9-]|$)"
 
@@ -35,12 +39,26 @@ unset PRODGUARD_TOOL
 self=${BASH_SOURCE[0]}
 wrappers=${self%/*}/../tools/prodguard
 
-# The next hit on PATH that is not prodguard: the kit's shim dir (KIT_BIN) and the wrapper dir are skipped.
+# True when dir $1 is listed under [trusted-shim-dirs]: absolute paths only, ~/ allowed.
+TRUSTED=$(awk '{ sub(/^[ \t]+/, ""); sub(/[ \t\r]+$/, "") }
+  /^\[.*\]$/ { t = ($0 == "[trusted-shim-dirs]"); next } t && $0 != "" && !/^[#;]/' "$conf" 2>/dev/null)
+trusted_dir() {
+  local x
+  while IFS= read -r x; do
+    x=${x/#\~\//$HOME/}
+    [[ $x == /* && $1 -ef $x ]] && return 0
+  done <<<"$TRUSTED"
+  return 1
+}
+
+# The next hit on PATH that is not prodguard: the kit's shim dir (KIT_BIN), the wrapper dir and the
+# trusted foreign shim dirs are skipped (a foreign shim could find this one again: a loop).
 real=
 IFS=: read -ra dirs <<<"$PATH"
 for d in "${dirs[@]}"; do
   [[ -n ${KIT_BIN:-} && $d -ef $KIT_BIN ]] && continue
   [[ $d -ef $wrappers ]] && continue
+  trusted_dir "$d" && continue
   c=$d/$tool
   if [[ -x $c && ! -d $c && ! $c -ef $self ]]; then real=$c; break; fi
 done

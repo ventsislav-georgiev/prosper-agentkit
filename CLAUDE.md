@@ -205,8 +205,8 @@ reprioritised, and every one is expected to stay planned and pending until it is
 - The shell, deliverable-file, handoff and background-job rules are in the worker's agent file: do
   not restate them in the prompt. A worker reports only once every job it started has finished or
   been stopped: a job finishing after the report wakes the worker and re-writes its whole context. Judge a dead worker by its output file, not its stall message.
-- Every session calls the cloud CLIs (`gcloud`, `aws`, `kubectl`, `terraform`, `tofu`) by name or as
-  `{{kit_bin}}/<tool>`, never by the real binary's path (`/opt/homebrew/...`).
+- Every session calls the cloud CLIs (`gcloud`, `aws`, `kubectl`, `terraform`, `tofu`) by name, never by the
+  real binary's path (`/opt/homebrew/...`). `{{kit_bin}}/<tool>` exists only while the prodguard-tools piece is on.
   prodguard's hook denies the real path; the shim passes reads through and refuses production writes.
 - Every dispatch appends a note to the entry:
   `todo.py append <project> <id> 'worker spawned via Agent, subagent_type: worker-<model>-<effort>
