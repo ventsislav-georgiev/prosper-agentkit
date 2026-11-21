@@ -1,0 +1,30 @@
+# prodguard config: copy this file to prodguard.conf in the same folder and replace the examples with your own.
+# Outside the kit, prodguard reads ${XDG_CONFIG_HOME:-$HOME/.config}/prodguard/prodguard.conf instead.
+# With no prodguard.conf (or one with no entry) nothing counts as production: every command passes, and each call
+# prints one line saying so.
+#
+# One entry per line; # starts a comment. The sections only group the entries: every entry counts the same way.
+# An entry matches as a whole word in the command and its resolved target (letters, digits and - around it are
+# part of the word), so acme-prod does not match acme-prod-staging, while gke_acme-prod_zone_x does.
+# Reads always pass; a write whose target matches is refused (exit 77), and so is a write whose target cannot be told.
+
+[gcp-projects]
+acme-prod
+
+[gcp-project-numbers]
+1000000000001
+
+# The servers of production clusters, as `kubectl config view` shows them: a renamed context still counts.
+[gke-endpoints]
+prod-k8s.example.com
+
+# Profile names here; the profile's own config section (sso_account_id, role_arn) is checked against the accounts.
+[aws-profiles]
+acme-prod-admin
+
+[aws-accounts]
+123456789012
+
+# Workspace names (TF_WORKSPACE or the selected one), TF_VAR_project values, state prefixes or bucket names.
+[terraform-workspaces]
+production

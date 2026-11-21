@@ -1,0 +1,16 @@
+# removeguard config: copy this file to removeguard.conf in the same folder and edit it.
+# Outside the kit, the tools read ${XDG_CONFIG_HOME:-$HOME/.config}/removeguard/config instead.
+# One glob per line. ~, $HOME, $UID and <uid> are expanded; * also matches /.
+# [allow] replaces the default (the scratchpad line below); [guard] adds to the built-in guards:
+# $HOME, $HOME/.claude, /, /tmp, /private/tmp, /var/folders and /Users are always guarded.
+
+# saferm deletes only below these (an owned /private/tmp/<name> outside claude-*, dch-*, cc-socks is always allowed).
+[allow]
+/private/tmp/claude-<uid>/*/*/scratchpad/*
+$HOME/scratch/*
+$HOME/src/*/.worktrees/*
+
+# The hook denies a recursive delete of exactly these; saferm refuses them.
+[guard]
+$HOME/src
+$HOME/Documents

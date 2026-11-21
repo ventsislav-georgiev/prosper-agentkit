@@ -1,0 +1,359 @@
+[extension]
+id          = "io.github.ventsislav-georgiev.prosper-agentkit"
+name        = "prosper-agentkit"
+title       = "Prosper Agent Kit"
+description = "Guard hooks, safe defaults and named workers for Claude Code."
+version     = "0.1.0"
+author      = "Ventsislav Georgiev"
+license     = "MIT"
+
+[extension.host]
+min_version = "2.175.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+[contributes.kit]
+schema   = 1
+requires = ["sh", "bash", "python3", "awk", "node"]
+
+[[contributes.kit.pieces]]
+id       = "rules"
+kind     = "claude-md"
+source   = "CLAUDE.md"
+position = "bottom"
+
+[[contributes.kit.pieces]]
+id   = "killguard-tools"
+kind = "tools"
+dir  = "tools/killguard"
+
+[[contributes.kit.pieces]]
+id      = "killguard-hook"
+kind    = "hook"
+event   = "PreToolUse"
+matcher = "Bash|Monitor"
+run     = "hooks/killguard.sh"
+timeout = 10
+needs   = ["killguard-tools"]
+
+[[contributes.kit.pieces]]
+id       = "killguard-rules"
+kind     = "claude-md"
+source   = "rules/killguard.md"
+position = "bottom"
+needs    = ["killguard-hook"]
+
+[[contributes.kit.pieces]]
+id   = "removeguard-tools"
+kind = "tools"
+dir  = "tools/removeguard"
+
+[[contributes.kit.pieces]]
+id      = "removeguard-hook"
+kind    = "hook"
+event   = "PreToolUse"
+matcher = "Bash|Monitor"
+run     = "hooks/removeguard.sh"
+timeout = 10
+needs   = ["removeguard-tools"]
+
+[[contributes.kit.pieces]]
+id       = "removeguard-rules"
+kind     = "claude-md"
+source   = "rules/removeguard.md"
+position = "bottom"
+needs    = ["removeguard-hook"]
+
+[[contributes.kit.pieces]]
+id   = "prodguard-tools"
+kind = "tools"
+dir  = "tools/prodguard"
+
+[[contributes.kit.pieces]]
+id      = "prodguard-hook"
+kind    = "hook"
+event   = "PreToolUse"
+matcher = "Bash|Monitor"
+run     = "hooks/prodguard.sh"
+timeout = 10
+needs   = ["prodguard-tools"]
+
+[[contributes.kit.pieces]]
+id       = "prodguard-rules"
+kind     = "claude-md"
+source   = "rules/prodguard.md"
+position = "bottom"
+needs    = ["prodguard-hook"]
+
+[[contributes.kit.pieces]]
+id      = "compactguard-hook"
+kind    = "hook"
+event   = "PreCompact"
+run     = "hooks/compactguard.py"
+timeout = 10
+
+[[contributes.kit.pieces]]
+id       = "compactguard-rules"
+kind     = "claude-md"
+source   = "rules/compactguard.md"
+position = "bottom"
+needs    = ["compactguard-hook"]
+
+[[contributes.kit.pieces]]
+id   = "ledger-tools"
+kind = "tools"
+dir  = "tools/ledger"
+
+[[contributes.kit.pieces]]
+id   = "monitors-tools"
+kind = "tools"
+dir  = "tools/monitors"
+
+[[contributes.kit.pieces]]
+id   = "slack-tools"
+kind = "tools"
+dir  = "tools/slack"
+
+[[contributes.kit.pieces]]
+id          = "hud"
+kind        = "statusline"
+run         = "hud/hud-compact.mjs"
+interpreter = "node"
+
+[[contributes.kit.pieces]]
+id      = "prs-hook"
+kind    = "hook"
+event   = "PostToolUse"
+matcher = "Bash"
+run     = "hooks/prs-add.py"
+timeout = 15
+needs   = ["hud"]
+
+[[contributes.kit.pieces]]
+id   = "guard-examples"
+kind = "seed"
+from = "seed"
+
+[[contributes.kit.pieces]]
+id   = "workers"
+kind = "agents"
+dir  = "agents"
+
+[[contributes.kit.pieces]]
+id       = "workers-rules"
+kind     = "claude-md"
+source   = "rules/workers.md"
+position = "bottom"
+needs    = ["workers"]
+
+[[contributes.kit.pieces]]
+id   = "deny-system"
+kind = "permissions"
+deny = [
+  "Bash(dd *)",
+  "Bash(diskutil apfs deleteContainer *)",
+  "Bash(diskutil apfs deleteVolume *)",
+  "Bash(diskutil eraseDisk *)",
+  "Bash(diskutil eraseVolume *)",
+  "Bash(diskutil partitionDisk *)",
+  "Bash(doas *)",
+  "Bash(fdisk *)",
+  "Bash(gdisk *)",
+  "Bash(mkfs *)",
+  "Bash(rm -fr $HOME *)",
+  "Bash(rm -fr --no-preserve-root *)",
+  "Bash(rm -fr / *)",
+  "Bash(rm -fr ~ *)",
+  "Bash(rm -fr ~/ *)",
+  "Bash(rm -rf $HOME *)",
+  "Bash(rm -rf --no-preserve-root *)",
+  "Bash(rm -rf / *)",
+  "Bash(rm -rf ~ *)",
+  "Bash(rm -rf ~/ *)",
+  "Bash(rm -rf ~/.aws *)",
+  "Bash(rm -rf ~/.claude *)",
+  "Bash(rm -rf ~/.gnupg *)",
+  "Bash(rm -rf ~/.ssh *)",
+  "Bash(shred *)",
+  "Bash(su *)",
+  "Bash(sudo *)",
+]
+
+[[contributes.kit.pieces]]
+id   = "deny-secrets"
+kind = "permissions"
+deny = [
+  "Edit(**/*.key)",
+  "Edit(**/*.pem)",
+  "Edit(**/credentials.json)",
+  "Edit(**/secrets/**)",
+  "Edit(.env)",
+  "Edit(.env.*)",
+  "Edit(~/.aws/config)",
+  "Edit(~/.aws/credentials)",
+  "Edit(~/.claude.json)",
+  "Edit(~/.claude/.credentials.json)",
+  "Edit(~/.config/gcloud/**)",
+  "Edit(~/.config/gh/hosts.yml)",
+  "Edit(~/.docker/config.json)",
+  "Edit(~/.gnupg/**)",
+  "Edit(~/.kube/**)",
+  "Edit(~/.netrc)",
+  "Edit(~/.npmrc)",
+  "Edit(~/.pypirc)",
+  "Edit(~/.ssh/**)",
+  "Read(**/*.key)",
+  "Read(**/*.pem)",
+  "Read(**/credentials.json)",
+  "Read(**/id_ed25519)",
+  "Read(**/id_rsa)",
+  "Read(**/secrets/**)",
+  "Read(.env)",
+  "Read(.env.*)",
+  "Read(//etc/shadow)",
+  "Read(~/.aws/config)",
+  "Read(~/.aws/credentials)",
+  "Read(~/.claude.json)",
+  "Read(~/.claude/.credentials.json)",
+  "Read(~/.config/gcloud/**)",
+  "Read(~/.config/gh/hosts.yml)",
+  "Read(~/.docker/config.json)",
+  "Read(~/.gnupg/**)",
+  "Read(~/.kube/**)",
+  "Read(~/.netrc)",
+  "Read(~/.npmrc)",
+  "Read(~/.pypirc)",
+  "Read(~/.ssh/**)",
+  "Artifact",
+]
+
+[[contributes.kit.pieces]]
+id   = "ask-destructive-gh"
+kind = "permissions"
+ask = [
+  "Bash(gh repo delete *)",
+  "Bash(gh release delete *)",
+]
+
+[[contributes.kit.pieces]]
+id   = "allow-readonly"
+kind = "permissions"
+allow = [
+  "Bash(defaults read *)",
+  "Bash(eza *)",
+  "Bash(gh run watch *)",
+  "Bash(git blame *)",
+  "Bash(git describe*)",
+  "Bash(git diff*)",
+  "Bash(git fetch*)",
+  "Bash(git log*)",
+  "Bash(git ls-files*)",
+  "Bash(git ls-remote*)",
+  "Bash(git rev-parse*)",
+  "Bash(git show*)",
+  "Bash(git status*)",
+  "Bash(jaq *)",
+  "Bash(log show *)",
+  "Read",
+  "TaskCreate",
+]
+
+[[contributes.kit.pieces]]
+id   = "allow-git"
+kind = "permissions"
+allow = [
+  "Bash(gh pr merge:*)",
+  "Bash(git add *)",
+  "Bash(git branch*)",
+  "Bash(git checkout *)",
+  "Bash(git cherry-pick *)",
+  "Bash(git commit *)",
+  "Bash(git merge *)",
+  "Bash(git pull*)",
+  "Bash(git rebase *)",
+  "Bash(git remote*)",
+  "Bash(git restore *)",
+  "Bash(git stash*)",
+  "Bash(git switch *)",
+  "Bash(git tag*)",
+  "Bash(git worktree *)",
+]
+
+[[contributes.kit.pieces]]
+id   = "allow-build"
+kind = "permissions"
+allow = [
+  "Bash(adb devices *)",
+  "Bash(adb logcat *)",
+  "Bash(deno check *)",
+  "Bash(go test *)",
+  "Bash(make plan *)",
+  "Bash(swift build *)",
+  "Bash(swift test *)",
+]
+
+[[contributes.kit.pieces]]
+id   = "allow-network"
+kind = "permissions"
+allow = [
+  "Bash(curl *)",
+  "Bash(kubectl *)",
+  "Bash(ssh *)",
+  "Bash(wget *)",
+]
+
+[[contributes.kit.settings]]
+key     = "ai_reviewer"
+title   = "pr-watch.sh: login of the AI review bot (empty: every reviewer is a person)"
+kind    = "string"
+default = ""
+
+[[contributes.kit.settings]]
+key     = "actions_status_url"
+title   = "pr-watch.sh: status page components.json that holds retriggers during an Actions outage (empty: no hold)"
+kind    = "string"
+default = ""
+
+[[contributes.kit.settings]]
+key     = "github_url"
+title   = "slack-say.py: GitHub web address for pull request links (empty: no links)"
+kind    = "string"
+default = ""
+
+[[contributes.kit.settings]]
+key     = "github_owner"
+title   = "slack-say.py: GitHub owner for repo#N links (empty: write owner/repo#N)"
+kind    = "string"
+default = ""
+
+[[contributes.kit.settings]]
+key     = "jira_url"
+title   = "slack-say.py: Jira base URL for issue-key links (empty: no Jira links)"
+kind    = "string"
+default = ""
+
+[[contributes.kit.settings]]
+key     = "jira_projects"
+title   = "slack-say.py: Jira project keys to link, comma-separated"
+kind    = "string"
+default = ""
+
+[[contributes.kit.settings]]
+key     = "slack_header"
+title   = "slack-say.py: first line of every message"
+kind    = "string"
+default = ":sparkles: _Claude says:_"
+
+[[contributes.kit.settings]]
+key     = "hud_default_model"
+title   = "hud: the model every session should run; another one shows as a badge (empty: no badge)"
+kind    = "string"
+default = ""
+
+[[contributes.kit.settings]]
+key     = "hud_default_effort"
+title   = "hud: the effort every session should run; another one shows as a badge (empty: no badge)"
+kind    = "string"
+default = ""

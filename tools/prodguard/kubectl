@@ -1,0 +1,5 @@
+#!/bin/sh
+# prodguard under the name kubectl: a kit holds no symlink, so this file names the tool.
+PRODGUARD_TOOL=kubectl
+export PRODGUARD_TOOL
+exec "${0%/*}/../../lib/prodguard" "$@"

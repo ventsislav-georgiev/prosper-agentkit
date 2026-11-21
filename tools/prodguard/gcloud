@@ -1,0 +1,5 @@
+#!/bin/sh
+# prodguard under the name gcloud: a kit holds no symlink, so this file names the tool.
+PRODGUARD_TOOL=gcloud
+export PRODGUARD_TOOL
+exec "${0%/*}/../../lib/prodguard" "$@"

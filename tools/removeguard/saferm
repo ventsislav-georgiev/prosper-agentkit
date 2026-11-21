@@ -1,0 +1,118 @@
+#!/bin/bash
+# saferm [-n] [-f] [-g] <path>...: recursive delete, limited to scratch locations. Every path is checked before anything is
+# deleted, and one refusal deletes nothing. Refused: a symlink anywhere in the given path, a target outside the allowed
+# prefixes, a guarded top, a git repo or worktree (.git present), more than 5000 entries without -f.
+# -g also removes a standalone scratch repo (.git is a directory); a worktree (.git is a file) stays refused.
+# -n prints what would be removed. Allowed prefixes and guarded tops come from the config file (see README).
+set -euo pipefail
+
+usage() { echo "usage: saferm [-n] [-f] [-g] <path>..." >&2; exit 2; }
+dry='' force='' gitok=''
+while getopts nfg o; do
+  case $o in n) dry=1 ;; f) force=1 ;; g) gitok=1 ;; *) usage ;; esac
+done
+shift $((OPTIND - 1))
+[[ $# -ge 1 ]] || usage
+
+uid=$(/usr/bin/id -u)
+home=${HOME:?saferm needs HOME}
+home=${home%/}
+# Under the kit (KIT_CONFIG set) the config is KIT_CONFIG/removeguard.conf; when that file is absent, or standalone, the XDG path.
+cfg=${KIT_CONFIG:+$KIT_CONFIG/removeguard.conf}
+[[ -n $cfg && -f $cfg ]] || cfg=${XDG_CONFIG_HOME:-$home/.config}/removeguard/config
+CAP=5000
+
+# shellcheck disable=SC2016,SC2088 # the literal config tokens $HOME, $UID and ~ are what gets replaced
+expand() {
+  local g=$1
+  g=${g//'${HOME}'/$home}
+  g=${g//'$HOME'/$home}
+  g=${g//'$UID'/$uid}
+  g=${g//'<uid>'/$uid}
+  [[ $g == '~' || $g == '~/'* ]] && g=$home${g:1}
+  printf '%s' "${g%/}"
+}
+
+allow=() guard=(/ /tmp /private/tmp /var/folders /private/var/folders /Users "$home" "$home/.claude")
+if [[ -f $cfg ]]; then
+  sec=
+  while IFS= read -r line || [[ -n $line ]]; do
+    line=${line#"${line%%[![:space:]]*}"}
+    line=${line%"${line##*[![:space:]]}"}
+    case $line in
+      '' | '#'*) ;;
+      '['*) sec=$line ;;
+      *) case $sec in
+           '[allow]') allow+=("$(expand "$line")") ;;
+           '[guard]') guard+=("$(expand "$line")") ;;
+         esac ;;
+    esac
+  done <"$cfg"
+else
+  allow=("/private/tmp/claude-$uid/*/*/scratchpad/*")
+fi
+
+bad='' targets=() counts=()
+refuse() { echo "saferm: refused: $1" >&2; bad=1; }
+
+for p in "$@"; do
+  if [[ ! -e $p && ! -L $p ]]; then
+    echo "saferm: $p does not exist, skipped" >&2
+    continue
+  fi
+  # Check the path as given: a worktree folder that is a symlink to the main repo resolves into the repo.
+  [[ $p == /* ]] && abs=$p || abs=$(pwd -P)/$p
+  walk='' link=''
+  IFS=/ read -ra parts <<<"$abs"
+  for c in "${parts[@]}"; do
+    [[ -z $c || $c == . ]] && continue
+    walk=$walk/$c
+    [[ $walk == /tmp || $walk == /var ]] && continue # macOS system links to /private
+    if [[ -L $walk ]]; then link=$walk; break; fi
+  done
+  if [[ -n $link ]]; then refuse "$p: $link is a symlink; remove the link itself with rm (no -r)"; continue; fi
+
+  r=$(/bin/realpath "$p")
+  ok=
+  for g in ${allow[@]+"${allow[@]}"}; do
+    # shellcheck disable=SC2053 # $g is a glob on purpose
+    [[ $r == $g ]] && ok=1
+  done
+  if [[ -z $ok && $r == /private/tmp/?* && $r != /private/tmp/claude-* && $r != /private/tmp/dch-* && $r != /private/tmp/cc-socks* ]] &&
+    [[ $(/usr/bin/stat -f %u "$r") == "$uid" ]]; then
+    ok=1
+  fi
+  for g in "${guard[@]}"; do
+    # shellcheck disable=SC2053
+    [[ $r == $g ]] && ok=
+  done
+  if [[ -z $ok ]]; then refuse "$r is outside the allowed prefixes (config: $cfg)"; continue; fi
+  wt='' repo=''
+  for g in "$r/.git" "$r"/*/.git; do
+    if [[ -f $g || -L $g ]]; then wt=1; elif [[ -d $g ]]; then repo=1; fi
+  done
+  if [[ -n $wt ]]; then
+    refuse "$r is, or directly holds, a git worktree; use git worktree remove <path>"
+    continue
+  fi
+  if [[ -n $repo && -z $gitok ]]; then
+    refuse "$r is, or directly holds, a git repo; use git worktree remove <path>, or pass -g for a scratch repo you made"
+    continue
+  fi
+
+  n=$(/usr/bin/find "$r" 2>/dev/null | /usr/bin/head -n $((CAP + 2)) | /usr/bin/wc -l) || true
+  n=$((n - 1))
+  if [[ $n -gt $CAP && -z $force ]]; then refuse "$r holds more than $CAP entries; pass -f if that is intended"; continue; fi
+  [[ $n -gt $CAP ]] && n=">$CAP"
+  targets+=("$r") counts+=("$n")
+done
+
+[[ -z $bad ]] || { echo "saferm: nothing deleted" >&2; exit 1; }
+for i in ${targets[@]+"${!targets[@]}"}; do
+  if [[ -n $dry ]]; then
+    echo "saferm: would remove ${targets[i]} (${counts[i]} entries)"
+  else
+    /bin/rm -rf -- "${targets[i]}"
+    echo "saferm: removed ${targets[i]} (${counts[i]} entries)"
+  fi
+done

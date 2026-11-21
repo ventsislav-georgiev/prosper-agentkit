@@ -1,0 +1,37 @@
+#!/bin/bash
+# safekill [-n] [-s SIG] <pattern>: signal this user's processes whose full command line matches <pattern>, by pid.
+# Lists the matches first; refuses outright, killing nothing, when the pattern is short or numeric or when any match is a
+# Claude or dch session. pgrep already leaves out this script and its ancestors.
+set -euo pipefail
+
+dry= sig=TERM
+while getopts ns: o; do
+  case $o in n) dry=1 ;; s) sig=$OPTARG ;; *) exit 2 ;; esac
+done
+shift $((OPTIND - 1))
+[[ $# -eq 1 ]] || { echo "usage: safekill [-n] [-s SIG] <pattern>" >&2; exit 2; }
+pat=$1
+
+# A bare number or uid matches every path that holds it (a socket folder named after a uid): a mass kill.
+if [[ ${#pat} -lt 6 || $pat =~ ^[0-9[:space:].*-]+$ ]]; then
+  echo "safekill: refused: pattern '$pat' is shorter than 6 characters or only digits" >&2
+  exit 2
+fi
+
+PROTECT='/tmp/dch-[0-9]+/|/tmp/cc-socks/|(^|/)(claude|dch)( |$)'
+
+list=$(/usr/bin/pgrep -U "$(/usr/bin/id -u)" -fl -- "$pat" || true)
+[[ -n $list ]] || { echo "safekill: no process matches '$pat'" >&2; exit 1; }
+echo "$list"
+
+if prot=$(/usr/bin/cut -d' ' -f2- <<<"$list" | /usr/bin/grep -En "$PROTECT"); then
+  echo "safekill: refused: the pattern matches a Claude or dch session; narrow it, or kill <pid> by hand:" >&2
+  echo "$prot" >&2
+  exit 3
+fi
+
+[[ -z $dry ]] || { echo "safekill: dry run, nothing signalled" >&2; exit 0; }
+pids=$(/usr/bin/cut -d' ' -f1 <<<"$list")
+# shellcheck disable=SC2086
+kill -s "$sig" $pids
+echo "safekill: sent SIG$sig to $(echo $pids)" >&2

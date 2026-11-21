@@ -1,0 +1,5 @@
+#!/bin/sh
+# prodguard under the name aws: a kit holds no symlink, so this file names the tool.
+PRODGUARD_TOOL=aws
+export PRODGUARD_TOOL
+exec "${0%/*}/../../lib/prodguard" "$@"

@@ -1,0 +1,310 @@
+#!/usr/bin/env bash
+# prodguard: stand-in for gcloud, aws, kubectl, terraform and tofu that refuses any command it
+# cannot prove read-only when the target is production. Run it through the wrapper files in
+# tools/prodguard (or a link named after the tool); it execs the next real binary on PATH.
+#
+# Read-only is an allowlist per tool, so an unknown command counts as a write. Prod detection
+# runs only for writes: reads exec straight through. A target that cannot be resolved counts as
+# prod. A blocked command exits 77. The one way through is
+# EXPLICIT_OPERATOR_ALLOW_DESTRUCTIVE_PROD_OPERATIONS=true (that exact value), and even then a
+# human has to type `production` on /dev/tty, outside any agent session (claude/codex).
+#
+# A seatbelt, not a boundary: the real binary by absolute path, bq/gsutil/helm/k9s, AWS static
+# keys whose profile names no account (env vars, credentials-file-only profiles) and bucket-only
+# targets (gs://x, s3://x) are not seen. The hook covers the agent routes around the wrappers.
+# Runs on macOS's bash 3.2 too. Run tests/prodguard.test.sh after changing anything here.
+
+# What makes a target production: the entries of prodguard.conf (KIT_CONFIG under the kit, else
+# the XDG path). One entry per line, under any [section]: GCP project ids and numbers, cluster
+# endpoints (they catch a renamed kubeconfig entry), AWS profile names and account ids, terraform
+# workspaces, state prefixes or buckets. An entry matches as a whole word: letters, digits and -
+# around it count as part of the word, so acme-prod does not match acme-prod-staging, while
+# gke_acme-prod_zone_x and projects/acme-prod/... do match. An entry holding a blank is skipped.
+conf=${KIT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/prodguard}/prodguard.conf
+PROD_RE=$(awk '
+  { sub(/^[ \t]+/, ""); sub(/[ \t\r]+$/, "") }
+  $0 == "" || /^[#;]/ || /^\[.*\]$/ || /[ \t]/ { next }
+  { gsub(/[][\\.^$*+?(){}|\/]/, "\\\\&"); out = out (out == "" ? "" : "|") $0 }
+  END { print out }' "$conf" 2>/dev/null)
+[[ -n $PROD_RE ]] && PROD_RE="(^|[^A-Za-z0-9-])($PROD_RE)([^A-Za-z0-9-]|$)"
+
+# The wrapper files in tools/prodguard set PRODGUARD_TOOL; a link named after the tool works too. Unset so a
+# nested call through a link is not taken for this tool.
+tool=${PRODGUARD_TOOL:-${0##*/}}
+unset PRODGUARD_TOOL
+self=${BASH_SOURCE[0]}
+wrappers=${self%/*}/../tools/prodguard
+
+# The next hit on PATH that is not prodguard: the kit's shim dir (KIT_BIN) and the wrapper dir are skipped.
+real=
+IFS=: read -ra dirs <<<"$PATH"
+for d in "${dirs[@]}"; do
+  [[ -n ${KIT_BIN:-} && $d -ef $KIT_BIN ]] && continue
+  [[ $d -ef $wrappers ]] && continue
+  c=$d/$tool
+  if [[ -x $c && ! -d $c && ! $c -ef $self ]]; then real=$c; break; fi
+done
+[[ -n $real ]] || { echo "prodguard: no $tool on PATH besides prodguard" >&2; exit 127; }
+
+# Value of flag $1 ("$1 v", "$1=v", or "-sv" for a one-letter flag) in the remaining args, up to
+# `--`; the last one wins, as in all four CLIs. Status 1 when absent.
+flagval() {
+  local f=$1 a v next= found=; shift
+  for a; do
+    if [[ -n $next ]]; then v=$a; found=1; next=; continue; fi
+    [[ $a == -- ]] && break
+    if [[ $a == "$f" ]]; then next=1
+    elif [[ $a == "$f="* ]]; then v=${a#*=}; found=1
+    elif [[ $f == -? && $a == "$f"?* ]]; then v=${a#"$f"}; found=1
+    fi
+  done
+  [[ -n $found ]] && printf '%s\n' "$v"
+}
+
+# Sets fk to what flag $1 does to the token after it: value (it is the flag's value, $2 lists
+# these), self (--f=v, -nprod, -it, or a no-value flag listed in $3) or unknown (it may be).
+flagkind() {
+  if [[ $1 == *=* || $1 == -[!-]?* ]]; then fk=self
+  elif [[ " $2 " == *" $1 "* ]]; then fk=value
+  elif [[ " $3 " == *" $1 "* ]]; then fk=self
+  else fk=unknown; fi
+}
+
+# Sets pos to the non-flag args minus known flags' values (flagkind's $2 and $3 come first).
+# pre[i]=1 when an unknown flag sits right before pos[i]: pos[i] may be that flag's value.
+positionals() {
+  local vf=$1 bf=$2 a skip= unk=; shift 2; pos=(); pre=()
+  for a; do
+    if [[ -n $skip ]]; then skip=; continue; fi
+    [[ $a == -- ]] && break
+    if [[ $a == -?* ]]; then
+      flagkind "$a" "$vf" "$bf"; unk=
+      case $fk in value) skip=1 ;; unknown) unk=1 ;; esac
+      continue
+    fi
+    pre[${#pos[@]}]=$unk; unk=
+    pos+=("$a")
+  done
+}
+
+# True when the first word is in the bucket and no later one is: a download.
+download_only() {
+  local s=$1 a; shift
+  [[ ${1:-} == "$s"* ]] || return 1; shift
+  for a; do [[ $a == "$s"* ]] && return 1; done
+  return 0
+}
+
+# Returns 0 for read-only, 1 for a write, 2 for always guarded (whatever the target).
+GCLOUD_VALUE='--project --account --configuration --format --verbosity --flatten --billing-project --impersonate-service-account --flags-file --trace-token --access-token-file --universe-domain --http-timeout'
+GCLOUD_BOOL='--quiet -q --log-http --no-log-http --user-output-enabled --no-user-output-enabled'
+
+# Walks the SDK's command tree (lib/surface/<group>/.../<command>.py|yaml) to the exact leaf, so a
+# resource named "list" or "get-x" is never mistaken for the verb.
+gcloud_ro() {
+  [[ -n ${_ARGCOMPLETE:-} ]] && return 0   # shell completion: prints candidates, runs nothing
+  local r dir w a n=0 top= leaf= prev=self words=()
+  r=$(readlink -f "$real"); dir=${r%/*}/../lib/surface
+  [[ -d $dir ]] || return 1
+  for a; do case $a in --) break ;; --help|-h) return 0 ;; esac; done   # after --, it is the ssh command's
+  while (($#)); do
+    w=$1; shift
+    [[ $w == -- ]] && break
+    if [[ $w == -?* ]]; then flagkind "$w" "$GCLOUD_VALUE" "$GCLOUD_BOOL"; prev=$fk; continue; fi
+    if [[ $prev == value ]]; then prev=self; continue; fi
+    [[ $prev == unknown ]] && return 1   # an unknown flag's value may be what would resolve
+    n=$((n + 1)); w=${w//-/_}
+    if [[ -z $top ]]; then case $w in alpha|beta|preview) continue ;; esac; fi
+    if [[ -d $dir/$w ]]; then dir=$dir/$w; top=${top:-$w}
+    elif [[ -f $dir/$w.py || -f $dir/$w.yaml ]]; then leaf=$w; top=${top:-$w}; break
+    else return 1   # neither a command word nor a known flag's value
+    fi
+  done
+  ((n)) || return 0   # bare `gcloud`, --version
+  case $top in
+    interactive|docker) return 2 ;;   # run commands in-process, out of this guard's sight
+    auth|config|components|help|topic|version|info|init) return 0 ;;   # local only
+  esac
+  case $leaf in
+    list*|describe*|get|get_*|read|tail|log|access|search*|print_*|browse|wait|ls|cat|du|hash|sign_url|test_iam_permissions) return 0 ;;
+    cp|rsync)   # -I / --read-paths-from-stdin (or an abbreviation) takes the sources from stdin
+      [[ $top == storage ]] || return 1
+      for a; do
+        [[ $a == --rea* || ( $a == -[!-]* && $a == *I* ) ]] && return 1
+        [[ $a == -?* ]] || words+=("$a")
+      done
+      download_only gs:// ${words[@]+"${words[@]}"}; return ;;
+  esac
+  return 1
+}
+
+gcloud_target() {
+  local p c r dir=${CLOUDSDK_CONFIG:-$HOME/.config/gcloud}
+  p=$(flagval --project "$@") || p=${CLOUDSDK_CORE_PROJECT:-}
+  if [[ -z $p ]]; then
+    c=$(flagval --configuration "$@") || c=${CLOUDSDK_ACTIVE_CONFIG_NAME:-$(cat "$dir/active_config" 2>/dev/null)}
+    p=$(sed -n 's/^project *= *//p' "$dir/configurations/config_${c:-default}" 2>/dev/null)
+  fi
+  if [[ -z $p ]]; then   # `config set --installation`, under the SDK root
+    r=$(readlink -f "$real"); p=$(sed -n 's/^project *= *//p' "${r%/*}/../properties" 2>/dev/null)
+  fi
+  echo "$p"
+  c=$(flagval --flags-file "$@") && cat "$c" 2>/dev/null
+  return 0
+}
+
+KUBECTL_VALUE='-n --namespace --context --cluster --user --kubeconfig -s --server --token --as --as-group --as-uid --request-timeout --cache-dir -v --v --log-file --log-dir --vmodule --certificate-authority --client-certificate --client-key --tls-server-name --username --password --profile --profile-output'
+KUBECTL_BOOL='--insecure-skip-tls-verify --match-server-version --warnings-as-errors --disable-compression'
+
+# exec, cp, attach, debug, proxy and port-forward reach into the cluster, so they count as writes.
+kubectl_ro() {
+  positionals "$KUBECTL_VALUE" "$KUBECTL_BOOL" "$@"
+  [[ -n ${pre[0]:-} ]] && return 1
+  case ${pos[0]:-} in
+    ''|get|describe|logs|top|explain|api-resources|api-versions|version|cluster-info|config|events|diff|wait|completion|help|kustomize|options|plugin|__complete*) return 0 ;;
+  esac
+  [[ -n ${pre[1]:-} ]] && return 1
+  case ${pos[0]}/${pos[1]:-} in auth/can-i|auth/whoami|rollout/status|rollout/history) return 0 ;; esac
+  return 1
+}
+
+kubectl_target() {
+  local k c s v kc=()
+  k=$(flagval --kubeconfig "$@") && kc=(--kubeconfig "$k")
+  c=$(flagval --context "$@")
+  v=$("$real" ${kc[@]+"${kc[@]}"} config view --minify ${c:+--context "$c"} \
+    -o 'jsonpath={.contexts[0].context.cluster} {.clusters[0].cluster.server}' 2>/dev/null) || return 1
+  [[ -n ${v// /} ]] || return 1
+  echo "$v"
+  # --server/-s and --cluster override the context's cluster: print the name=server line behind
+  # every one given (CLIs take the last, but --server and -s are separate flags here).
+  s=" $(flagval --server "$@") $(flagval -s "$@") "; k=$(flagval --cluster "$@")
+  if [[ -n ${s// /}$k ]]; then
+    "$real" ${kc[@]+"${kc[@]}"} config view -o 'jsonpath={range .clusters[*]}{.name}={.cluster.server}{"\n"}{end}' 2>/dev/null |
+      awk -v s="$s" -v k="$k" '{ i = index($0, "="); v = substr($0, i + 1) }
+        (v != "" && index(s, " " v " ")) || (k != "" && substr($0, 1, i - 1) == k)'
+  fi
+  return 0
+}
+
+AWS_VALUE='--profile --region --output --endpoint-url --query --color --ca-bundle --cli-read-timeout --cli-connect-timeout --cli-binary-format'
+AWS_BOOL='--debug --no-verify-ssl --no-paginate --no-sign-request --no-cli-pager --cli-auto-prompt --no-cli-auto-prompt'
+
+# lambda invoke, ssm start-session, athena start-query-execution and *execute-statement are
+# writes: none of them fit the read prefixes below.
+aws_ro() {
+  positionals "$AWS_VALUE" "$AWS_BOOL" "$@"
+  [[ -n ${pre[0]:-}${pre[1]:-} ]] && return 1
+  local svc=${pos[0]:-} op=${pos[1]:-}
+  case $svc in ''|configure|sso|login|logout|help|sts) return 0 ;; esac
+  case $op in ''|help) return 0 ;; esac
+  [[ $svc/$op == eks/update-kubeconfig ]] && return 0
+  if [[ $svc == s3 ]]; then
+    case $op in
+      ls|presign) return 0 ;;
+      cp|sync) download_only s3:// "${pos[@]:2}"; return ;;
+    esac
+    return 1
+  fi
+  case $op in describe-*|list-*|get-*|head-*|filter-*|lookup-*|search-*|batch-get-*|scan|query|tail|wait) return 0 ;; esac
+  return 1
+}
+
+# The profile's own config section rides along, so its sso_account_id or role_arn decides, not
+# its name.
+aws_target() {
+  local p s
+  p=$(flagval --profile "$@") || p=${AWS_PROFILE:-${AWS_DEFAULT_PROFILE:-default}}
+  echo "$p"
+  if [[ $p == default ]]; then s='[default]'; else s="[profile $p]"; fi
+  awk -v s="$s" '$0 == s { f = 1; next } /^\[/ { f = 0 } f' "${AWS_CONFIG_FILE:-$HOME/.aws/config}" 2>/dev/null
+  return 0
+}
+
+# init -migrate-state/-force-copy moves state and workspace select -or-create makes a workspace,
+# so both count as writes.
+terraform_ro() {
+  positionals "" "" "$@"
+  case ${pos[0]:-} in
+    ''|plan|show|output|validate|fmt|get|providers|graph|version|console|login|logout|metadata|help) return 0 ;;
+    init) case " $* " in *-migrate-state*|*-force-copy*) return 1 ;; esac; return 0 ;;
+  esac
+  case ${pos[0]}/${pos[1]:-} in
+    state/list|state/show|state/pull|workspace/list|workspace/show) return 0 ;;
+    workspace/select) case " $* " in *-or-create*) return 1 ;; esac; return 0 ;;
+  esac
+  return 1
+}
+
+# The env a wrapper Makefile may export, the selected workspace (.terraform/environment) and the
+# initialised backend's bucket, prefix and key, for a bare `cd layer && tofu apply`.
+terraform_target() {
+  local dir data
+  dir=$(flagval -chdir "$@") || dir=.
+  data=${TF_DATA_DIR:-.terraform}
+  [[ $data == /* ]] || data=$dir/$data
+  echo "TF_VAR_project=${TF_VAR_project:-} ${TF_WORKSPACE:-} ${TERRAFORM_BUCKET_PROFILE:-} ${AWS_PROFILE:-} ${GOOGLE_PROJECT:-} ${GOOGLE_CLOUD_PROJECT:-}"
+  cat "$data/environment" 2>/dev/null; echo
+  grep -Eo '"(prefix|key|bucket)": *"[^"]*"' "$data/terraform.tfstate" 2>/dev/null
+  return 0
+}
+
+case $tool in
+  gcloud|aws|kubectl|terraform) kind=$tool ;;
+  tofu) kind=terraform ;;
+  *) echo "prodguard: does not know how to guard '$tool'" >&2; exit 127 ;;
+esac
+
+# Production is what prodguard.conf lists; with no entry (no file, or only comments) everything passes.
+if [[ -z $PROD_RE ]]; then
+  echo "prodguard: no production defined in $conf; $tool runs unguarded" >&2
+  exec "$real" "$@"
+fi
+
+"${kind}_ro" "$@"; rc=$?
+((rc == 0)) && exec "$real" "$@"
+if ((rc == 2)); then why="$tool runs commands this guard cannot see"
+elif ! target=$("${kind}_target" "$@"); then why="could not resolve the target"
+elif [[ "$target $*" =~ $PROD_RE ]]; then why="the target is production (matched '${BASH_REMATCH[2]}' from $conf)"
+else exec "$real" "$@"
+fi
+
+# Never echo the args: they can carry tokens.
+if [[ ${EXPLICIT_OPERATOR_ALLOW_DESTRUCTIVE_PROD_OPERATIONS:-} != true ]]; then
+  echo "prodguard: STOP. Blocked $tool: not a read-only command, and $why." >&2
+  echo "prodguard: this is a production write. Do not retry it or work around it. Ask the human operator to run it themselves, in their own terminal (with EXPLICIT_OPERATOR_ALLOW_DESTRUCTIVE_PROD_OPERATIONS=true)." >&2
+  exit 77
+fi
+
+refuse() {
+  echo "prodguard: STOP. Override refused for $tool: $1. Do not retry it or work around it; a human must run it in their own terminal." >&2
+  exit 77
+}
+
+# True when an agent session (claude, codex) is this process's ancestor, or when that cannot be
+# told (ps failing fails closed).
+under_agent() {
+  [[ -n ${CLAUDECODE:-} ]] && return 0
+  local pid=$$ ppid comm n=0
+  while ((pid > 1)); do
+    ((n++ < 64)) || return 0
+    read -r ppid comm <<<"$(/bin/ps -o ppid=,comm= -p "$pid" 2>/dev/null)"
+    [[ $ppid =~ ^[0-9]+$ ]] || return 0
+    case ${comm##*/} in [Cc]laude*|[Cc]odex*) return 0 ;; esac   # the desktop apps: Claude, Codex
+    pid=$ppid
+  done
+  return 1
+}
+
+# The env var alone is not enough: the word is typed on the terminal, never read from stdin, and
+# whatever was queued there before the prompt is dropped. pty tricks and daemonizing still get
+# past this; IAM is the boundary.
+under_agent && refuse "running under an agent session (claude/codex)"
+{ exec 3<>/dev/tty; } 2>/dev/null || refuse "no terminal to confirm on"
+while read -r -t 1 _ <&3; do :; done
+printf 'prodguard: OVERRIDE: %s write, and %s.\nprodguard: type production to run it: ' "$tool" "$why" >&3
+read -r -t 30 ans <&3 || ans=
+exec 3>&-
+[[ $ans == production ]] || refuse "not confirmed"
+echo "prodguard: OVERRIDE: running a $tool write; $why" >&2
+exec "$real" "$@"
