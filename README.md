@@ -75,6 +75,10 @@ piece: you can switch any piece off on the install sheet and keep the rest.
   name is already there and the kit did not write it, it is left alone and the piece reports it as refused.
 - `workers-rules`: instruction text that tells Claude to hand work to those named workers and how to pick a tier.
   Needs `workers`: switching `workers` off switches this off too.
+- `prosper-rules`: instruction text for Prosper's control CLI, `ProsperApp ctl` (the binary inside Prosper.app): run
+  `describe` first, then the commands (start, read, talk to or resume agent sessions, X-ray search, layouts, settings).
+  Changing commands need Prosper's Settings switch "Let agents control Prosper" on; reads never do. The kit has no
+  skill piece kind, so this is a rules piece; `CLAUDE.md` and every worker agent file carry a short pointer to it.
 - `deny-system`: 27 deny rules for disk tools, privilege tools and recursive deletes of top-level folders.
 - `deny-secrets`: 42 deny rules: 41 keep Claude from reading or editing secret files (keys, cloud and tool
   credentials, `.env` files) and one denies the `Artifact` tool.

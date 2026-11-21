@@ -36,6 +36,12 @@ Rules for monitoring anything, with or without these scripts:
 - An unreachable backend is not a transition: go quiet, announce the recovery.
 - Extend these scripts rather than writing one-off loops; a new kind of subject earns a new script next to them, documented in the kit README.
 
+# Controlling Prosper
+
+To start, read, talk to or resume Prosper's agent sessions, search their X-ray, switch layouts or change a Prosper
+setting, use `ProsperApp ctl` (the binary inside Prosper.app). Run `ProsperApp ctl describe` first: it lists every
+command. The `prosper-rules` piece has the rules and examples.
+
 # Todos — Session List + the Ledger Database
 
 Two surfaces, one set of ids: the session task list is the working queue; the ledger is the record

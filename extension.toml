@@ -3,7 +3,7 @@ id          = "io.github.ventsislav-georgiev.prosper-agentkit"
 name        = "prosper-agentkit"
 title       = "Prosper Agent Kit"
 description = "Guard hooks, safe defaults and named workers for Claude Code."
-version     = "0.1.0"
+version     = "0.2.0"
 author      = "Ventsislav Georgiev"
 license     = "MIT"
 
@@ -147,6 +147,12 @@ kind     = "claude-md"
 source   = "rules/workers.md"
 position = "bottom"
 needs    = ["workers"]
+
+[[contributes.kit.pieces]]
+id       = "prosper-rules"
+kind     = "claude-md"
+source   = "rules/prosper.md"
+position = "bottom"
 
 [[contributes.kit.pieces]]
 id   = "deny-system"
