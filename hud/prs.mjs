@@ -13,7 +13,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { kitStateDir } from './lib/config-dir.mjs';
+import { getClaudeConfigDir, kitStateDir } from './lib/config-dir.mjs';
 
 const DIM = '\x1b[2m';
 const CYAN = '\x1b[36m';
@@ -37,7 +37,28 @@ const link = (url, text) => `\x1b]8;;${url}\x07${text}\x1b]8;;\x07`;
 const statePath = (sid) => join(kitStateDir(), 'hud', `prs-${sid}.json`);
 
 function load(sid) {
-  try { return JSON.parse(readFileSync(statePath(sid), 'utf8')); } catch { return { open: {}, merged: 0 }; }
+  try { return JSON.parse(readFileSync(statePath(sid), 'utf8')); } catch (e) {
+    return e?.code === 'ENOENT' ? importLegacy(sid) : { open: {}, merged: 0 };
+  }
+}
+
+// Pre-kit HUD file, read once when the kit has no state yet; never written or removed.
+function importLegacy(sid) {
+  const none = { open: {}, merged: 0 };
+  try {
+    const old = JSON.parse(readFileSync(join(getClaudeConfigDir(), 'hud', `prs-${sid}.json`), 'utf8'));
+    const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
+    if (!isObj(old) || !isObj(old.open)) return none;
+    const open = {};
+    for (const [url, pr] of Object.entries(old.open)) {
+      if (parseUrl(url) && isObj(pr) && typeof pr.repo === 'string' && Number.isInteger(pr.num) && pr.num > 0) open[url] = { repo: pr.repo, num: pr.num };
+    }
+    const merged = Number.isSafeInteger(old.merged) && old.merged >= 0 ? old.merged : 0;
+    if (!Object.keys(open).length && !merged) return none;
+    const state = { open, merged, checkedAt: 0 };
+    save(sid, state);
+    return state;
+  } catch { return none; }
 }
 
 function save(sid, state) {

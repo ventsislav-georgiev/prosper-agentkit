@@ -63,7 +63,7 @@ piece: you can switch any piece off on the install sheet and keep the rest.
   status line while it is on; Remove puts yours back.
 - `prs-hook`: a `PostToolUse` hook for `Bash` that feeds the `hud` pull request panel. When a `gh pr create` command
   finishes, each pull request URL (https, any host, then owner, repo, `pull` and the number) it printed is added to the
-  session's list; anything else adds nothing. It never blocks and prints nothing. Needs `hud`.
+  session's list; anything else adds nothing. It never blocks and prints nothing. Needs `hud`. A session with no kit PR state takes its list once from the pre-kit HUD file (`~/.claude/hud/prs-<session>.json`) and never changes that file.
 - `guard-examples`: copies `removeguard.conf.example`, `prodguard.conf.example` and
   `settings-recommended.example.json` into the kit's config folder once. They are examples only: the guards read
   `removeguard.conf` and `prodguard.conf`, never the examples, and nothing reads the settings example (see
