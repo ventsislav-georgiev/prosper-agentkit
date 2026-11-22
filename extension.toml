@@ -3,7 +3,7 @@ id          = "io.github.ventsislav-georgiev.prosper-agentkit"
 name        = "prosper-agentkit"
 title       = "Prosper Agent Kit"
 description = "Guard hooks, safe defaults and named workers for Claude Code."
-version     = "0.2.1"
+version     = "0.2.2"
 author      = "Ventsislav Georgiev"
 license     = "MIT"
 
@@ -36,6 +36,7 @@ event   = "PreToolUse"
 matcher = "Bash|Monitor"
 run     = "hooks/killguard.sh"
 timeout = 10
+on_error = "deny"
 needs   = ["killguard-tools"]
 
 [[contributes.kit.pieces]]
@@ -57,6 +58,7 @@ event   = "PreToolUse"
 matcher = "Bash|Monitor"
 run     = "hooks/removeguard.sh"
 timeout = 10
+on_error = "deny"
 needs   = ["removeguard-tools"]
 
 [[contributes.kit.pieces]]
@@ -78,6 +80,7 @@ event   = "PreToolUse"
 matcher = "Bash|Monitor"
 run     = "hooks/prodguard.sh"
 timeout = 10
+on_error = "deny"
 needs   = ["prodguard-tools"]
 
 [[contributes.kit.pieces]]

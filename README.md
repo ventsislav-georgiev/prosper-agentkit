@@ -88,6 +88,13 @@ piece: you can switch any piece off on the install sheet and keep the rest.
 - `allow-build`: 7 allow rules for build and test commands (`swift build`, `swift test`, `go test` and similar).
 - `allow-network`: 4 allow rules for `curl`, `wget`, `ssh` and `kubectl`.
 
+The three guard hooks are marked `on_error = "deny"`: when Prosper's kit runner cannot run one (bad arguments, `kit.env` missing or unsafe, input over 1 MiB, a failing `.pre` hook, a missing script), the tool call is blocked rather than let through. This needs Prosper 2.175.0-beta.50 or later.
+
+If a broken runner state blocks every `Bash` and `Monitor` call (each refusal ends with "blocked: this deny guard fails
+closed"), an agent's `Bash` is blocked too, so its only way out is `Edit` of `~/.claude/settings.json` (remove that
+hook group). You can run the kit's Repair (Settings, Agent Kits, or `ProsperApp ctl kits.repair` from your own
+Terminal), or switch the failing guard piece off there (`ProsperApp ctl kits.apply` with it in `off`).
+
 The guards are a seatbelt, not a boundary: they read the command text, so `eval`, `bash -c "$x"`, a script file or a
 delete written in another language get through. The removeguard hook allows a command it fails to parse rather than
 block every call. prodguard does not see `bq`, `gsutil`, `helm` or `k9s`, AWS keys whose profile names no account, or a
