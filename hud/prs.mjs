@@ -36,7 +36,12 @@ const link = (url, text) => `\x1b]8;;${url}\x07${text}\x1b]8;;\x07`;
 
 const statePath = (sid) => join(kitStateDir(), 'hud', `prs-${sid}.json`);
 
+// Same rule as prs-add.py and the meta push: a sid outside it is no session, so it never becomes a path.
+const SID = /^[0-9A-Za-z-]{1,64}$/;
+const validSid = (sid) => typeof sid === 'string' && SID.test(sid);
+
 function load(sid) {
+  if (!validSid(sid)) return { open: {}, merged: 0 };
   try { return JSON.parse(readFileSync(statePath(sid), 'utf8')); } catch (e) {
     return e?.code === 'ENOENT' ? importLegacy(sid) : { open: {}, merged: 0 };
   }
@@ -62,6 +67,7 @@ function importLegacy(sid) {
 }
 
 function save(sid, state) {
+  if (!validSid(sid)) return;
   try {
     mkdirSync(dirname(statePath(sid)), { recursive: true });
     writeFileSync(statePath(sid), JSON.stringify(state));
@@ -208,6 +214,7 @@ function isMain() {
 if (isMain()) {
   const [, , cmd, sid] = process.argv;
   if (!sid) process.exit(0);
+  if (!validSid(sid)) process.exit(1);
   if (cmd === 'add') {
     const urls = readFileSync(0, 'utf8').split('\n').map((l) => l.trim()).filter(Boolean);
     if (urls.length) add(sid, urls);
