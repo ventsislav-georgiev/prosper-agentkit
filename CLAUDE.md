@@ -21,8 +21,8 @@ Use over POSIX equivalents (gitignore-aware, faster, better defaults). POSIX onl
 
 Watching a PR, a rollout, or any slow external thing: launch one of these as a background shell
 instead of a fresh poll loop or repeated status checks. They print only state transitions —
-silence means nothing changed — and exit 0 on a terminal state. The kit README's Monitors section lists
-every script.
+silence means nothing changed — and exit 0 on a terminal state. The Monitors section of the kit's
+REFERENCE.md lists every script.
 
 - `{{kit_bin}}/pr-watch.sh <pr> [owner/repo] [local-repo-dir]`: a PR until MERGED/CLOSED; it reruns
   infrastructure failures itself.
@@ -34,7 +34,7 @@ Rules for monitoring anything, with or without these scripts:
 - Never park a watcher in a session scratchpad — it is wiped between sessions and the watcher dies with it.
 - Re-check watchers are alive every ~5 minutes and restart any that died; a dead monitor is the failure mode.
 - An unreachable backend is not a transition: go quiet, announce the recovery.
-- Extend these scripts rather than writing one-off loops; a new kind of subject earns a new script next to them, documented in the kit README.
+- Extend these scripts rather than writing one-off loops; a new kind of subject earns a new script next to them, documented in the kit's REFERENCE.md.
 
 # Controlling Prosper
 

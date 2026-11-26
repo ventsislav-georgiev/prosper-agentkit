@@ -3,7 +3,7 @@
 # deleted, and one refusal deletes nothing. Refused: a symlink anywhere in the given path, a target outside the allowed
 # prefixes, a guarded top, a git repo or worktree (.git present), more than 5000 entries without -f.
 # -g also removes a standalone scratch repo (.git is a directory); a worktree (.git is a file) stays refused.
-# -n prints what would be removed. Allowed prefixes and guarded tops come from the config file (see README).
+# -n prints what would be removed. Allowed prefixes and guarded tops come from the config file (see REFERENCE.md).
 set -euo pipefail
 
 usage() { echo "usage: saferm [-n] [-f] [-g] <path>..." >&2; exit 2; }
