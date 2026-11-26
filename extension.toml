@@ -3,7 +3,7 @@ id          = "io.github.ventsislav-georgiev.prosper-agentkit"
 name        = "prosper-agentkit"
 title       = "Prosper Agent Kit"
 description = "Guard hooks, safe defaults and named workers for Claude Code."
-version     = "0.2.9"
+version     = "0.2.10"
 author      = "Ventsislav Georgiev"
 license     = "MIT"
 
@@ -387,5 +387,11 @@ default = ""
 [[contributes.kit.settings]]
 key     = "hud_default_effort"
 title   = "hud: the effort every session should run; another one shows as a badge (empty: no badge)"
+kind    = "string"
+default = ""
+
+[[contributes.kit.settings]]
+key     = "spend_small_accounts"
+title   = "spend-report.py: accounts on a smaller plan, left out of account-week totals (labels, comma-separated)"
 kind    = "string"
 default = ""

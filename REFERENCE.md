@@ -87,6 +87,13 @@ piece: you can switch any piece off on the install sheet and keep the rest.
   no usage. `usage-audit.py [days] [--root DIR]` reads the transcripts changed in the last `days` (default 14) under
   `--root`, else `$CLAUDE_CONFIG_DIR/projects`, else `~/.claude/projects`, and prints built-in tool calls, MCP calls
   per server and per project folder, and Skill calls. It reads only and skips lines that are not JSON.
+  `spend-report.py [report] START [END]` is the spend review (see Spend review in README.md); its subcommands are
+  `expiry`, `byproject`, `tokens`, `ctxsize`, `revive`, `points`, `accounts`, `fit`, `compact`, `supervisor`, `floor`
+  and `selftest`, and `spend-report.py` alone prints them. Its modules live in `lib/spend/`. It reads transcripts from
+  `$CLAUDE_CONFIG_DIR/projects` (else `~/.claude/projects`), Prosper's ccpool files from `$PROSPER_CCPOOL_DIR` (else
+  `~/Library/Application Support/Prosper/ccpool`) and the ledger as `todo.py` finds it (`LEDGER_DB` wins), opened
+  read-only; a missing ledger is reported, never created. `rules/daily-review-prompt.md` is a daily review prompt to
+  give a spend session.
 - `hud`: Claude Code's status line, run with `node` (22.13 or later, for `node:sqlite`). It lists the session's open
   tasks and the ledger entries of the current project, read from the kit's ledger database (`LEDGER_DB` wins, as for
   `todo.py`), with a live-worker count; per-item rows and counts are off until `OMC_HUD_TASK_ROWS=1` or
@@ -198,13 +205,15 @@ poll every 5 minutes or less and exit when the subject reaches an end state.
   outage. `github_url` is the GitHub web address `slack-say.py` links pull requests to, and `github_owner` lets it
   link `repo#N` without an owner; `jira_url` and `jira_projects` (comma-separated keys) turn those Jira
   keys into links; `slack_header` is the message's first line. `hud_default_model` and `hud_default_effort` are
-  the model name and effort your sessions should run; the `hud` status line shows any other one as a badge. All are
+  the model name and effort your sessions should run; the `hud` status line shows any other one as a badge.
+  `spend_small_accounts` (comma-separated labels) names the accounts on a smaller plan, which
+  `spend-report.py points` and `accounts` leave out of the account-week totals. All are
   empty or a plain default until you set them.
 - Switch off any piece you do not want on the install sheet; a piece that needs it goes off with it.
 - Run your own script before or after any hook or tool: put an executable file named `<name>.pre` or `<name>.post` in
   `~/.config/prosper-agentkit/hooks/`. `<name>` is the piece id for a hook or the status line (`killguard-hook`,
   `removeguard-hook`, `prodguard-hook`, `compactguard-hook`, `worker-rules-hook`, `prs-hook`, `hud`) and the command name for a tool (`safekill`,
-  `saferm`, `gcloud`, `aws`, `kubectl`, `terraform`, `tofu`, `todo.py`, `memory.py`, `pr-watch.sh`, `gh-run-watch.sh`, `k8s-deploy-watch.sh`, `slack-say.py`, `ctxprobe.sh`, `usage-audit.py`). A `.pre`
+  `saferm`, `gcloud`, `aws`, `kubectl`, `terraform`, `tofu`, `todo.py`, `memory.py`, `pr-watch.sh`, `gh-run-watch.sh`, `k8s-deploy-watch.sh`, `slack-say.py`, `ctxprobe.sh`, `usage-audit.py`, `spend-report.py`). A `.pre`
   that exits non-zero stops the run (exit 2 blocks the tool call for a hook); a `.post` sees
   `KIT_STATUS` and cannot change the output. Prosper runs only a regular file you own that is not group- or
   world-writable.

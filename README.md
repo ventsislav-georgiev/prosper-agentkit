@@ -151,6 +151,21 @@ about 3.4k fewer tokens at every session start. They are not applied for you: me
 | `PublishPlugin` | publish a plugin to a marketplace |
 | `RemoteTrigger` | create and run scheduled remote agents |
 
+### Spend review
+
+`spend-report.py START [END]` (`spend-tools`) reports what a time window cost at API list prices, used only as
+weights: main sessions against workers, cache reads, writes and output, full cache rewrites by cause (expiry,
+account rotation, compaction, other), workers by model and by worker tier, ledger dispatches per tier with the entries
+later sent to a higher tier, and the cost per closed ledger entry. It also reads Prosper's ccpool files (usage rows,
+events and `state.json` under `~/Library/Application Support/Prosper/ccpool`) for bench and rotation events, refused
+startup quota checks, compaction summary calls the transcripts do not show, and the sessions pinned to each account.
+Subcommands break the window down further (`expiry`, `tokens`, `ctxsize`, `byproject`, `revive`), size the account
+pool (`points`, `accounts`, `fit`) and take one transcript apart (`compact`, `supervisor`, `floor`); run it without
+arguments for the list. Accounts on a smaller plan go in the `spend_small_accounts` setting so the account-week
+totals leave them out. `rules/daily-review-prompt.md` in the kit folder is a prompt for a spend session to run once a
+day from a session cron: it runs the report for the last 24 hours, compares it with the day before and your own
+baseline, and names at most one recommendation. Everything reads only.
+
 ### Safety guards
 
 | Guard | What it stops | What to use instead |
@@ -213,7 +228,7 @@ the supervisor:
 | `monitors-tools` | `pr-watch.sh`, `gh-run-watch.sh` and `k8s-deploy-watch.sh` |
 | `slack-tools` | `slack-say.py` |
 | `mcpbridge-tools` | `mcpbridge`, a stdio MCP server that keeps a remote MCP server's calls alive across network switches |
-| `spend-tools` | `ctxprobe.sh` and `usage-audit.py`, to measure a session's starting tokens and find what you never use |
+| `spend-tools` | `ctxprobe.sh` and `usage-audit.py`, to measure a session's starting tokens and find what you never use; `spend-report.py`, the spend review over your transcripts, Prosper's ccpool files and the ledger |
 | `hud` | a status line with tasks, ledger entries and live workers |
 | `prs-hook` | feeds pull requests from `gh pr create` into the status line |
 | `guard-examples` | example config files for the guards and recommended settings |
