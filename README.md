@@ -103,6 +103,20 @@ means nothing changed, and each exits on an end state.
 
 The session checks that its watchers are still alive about every 5 minutes.
 
+### MCP bridge
+
+A laptop that switches networks (Wi-Fi to tethering, a VPN that reconnects) drops in-flight calls to a remote MCP
+server, and Claude Code then marks that server failed until you reconnect it with `/mcp`. `mcpbridge` is a local stdio
+MCP server that relays to the remote streamable-HTTP one: it holds each call while the network is gone, retries it up
+to a deadline (`--deadline`, default 120 s), re-opens the MCP session once the server is back, and never exits on an
+upstream failure. A tool call that may already have reached the server is answered with an error, not run twice. For
+a server that needs a login it runs the MCP OAuth flow in your browser once and keeps the tokens in
+`~/.config/mcpbridge/` (folder 0700, files 0600, never logged). Point a server entry in Claude Code's MCP config at it:
+
+```json
+"my-server": { "command": "<kit bin>/mcpbridge", "args": ["https://example.com/mcp"] }
+```
+
 ### Safety guards
 
 | Guard | What it stops | What to use instead |
@@ -163,6 +177,7 @@ the supervisor:
 | `ledger-tools` | `todo.py` and `memory.py` over one SQLite database |
 | `monitors-tools` | `pr-watch.sh`, `gh-run-watch.sh` and `k8s-deploy-watch.sh` |
 | `slack-tools` | `slack-say.py` |
+| `mcpbridge-tools` | `mcpbridge`, a stdio MCP server that keeps a remote MCP server's calls alive across network switches |
 | `hud` | a status line with tasks, ledger entries and live workers |
 | `prs-hook` | feeds pull requests from `gh pr create` into the status line |
 | `guard-examples` | example config files for the guards and recommended settings |
@@ -175,7 +190,8 @@ Each piece is described in full in [REFERENCE.md](REFERENCE.md#what-it-changes).
 ## Requirements
 
 - Prosper 2.175.0 or later, and Claude Code.
-- `sh`, `bash`, `python3` and `awk` on PATH; `jq` is used when present.
+- `sh`, `bash`, `python3` and `awk` on PATH; `jq` is used when present. Python scripts start `/usr/bin/python3` when
+  the Command Line Tools or Xcode back it, which skips a pyenv, asdf or conda shim, and `python3` on PATH otherwise.
 - For the status line: `node` 22.13 or later.
 - For the monitors: `gh` signed in, `jq` and `curl`, and `kubectl` for `k8s-deploy-watch.sh`.
 

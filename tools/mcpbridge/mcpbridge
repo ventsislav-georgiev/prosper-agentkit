@@ -1,0 +1,556 @@
+#!/bin/sh
+''''exec "${0%/*}/../../lib/python3" "$0" "$@" # ''' # sh runs this line (lib/python3 picks the interpreter); Python reads a string
+from __future__ import annotations
+
+__doc__ = """mcpbridge -- a stdio MCP server that relays to a remote streamable-HTTP MCP server
+and survives network switches.
+
+    mcpbridge https://example.com/mcp [--deadline 120]
+    mcpbridge --logout https://example.com/mcp
+
+Why it exists
+-------------
+A laptop that switches networks (Wi-Fi to tethering, a VPN that reconnects)
+drops in-flight calls for a few seconds. A call made in that gap gets a
+connection error, or a 404 from a server that only answers on an allowed
+network, and Claude Code then marks an HTTP MCP server failed and does not
+retry it until someone runs `/mcp` and reconnects it.
+
+A stdio server is marked failed only when its process dies, so this one never
+exits on an upstream failure. It holds each call and retries it until the
+network is back, then re-initialises the upstream MCP session behind Claude
+Code's back. The client sees one slow call, not a dead server. A call still
+failing after `--deadline` seconds gets a JSON-RPC error, and the bridge keeps
+running for the next call.
+
+Auth is the MCP OAuth 2.1 flow (PRM discovery, dynamic client registration,
+PKCE, RFC 8707 resource). Tokens go to ~/.config/mcpbridge/<origin>.json
+(0600) and are never logged. The first login opens a browser.
+"""
+
+import argparse
+import base64
+import contextlib
+import fcntl
+import hashlib
+import http.client
+import http.server
+import json
+import os
+import re
+import secrets
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import webbrowser
+from pathlib import Path
+
+RETRY_STATUS = {404, 502, 503, 504}
+CONNECT_TIMEOUT = 10
+READ_TIMEOUT = 300
+LOGIN_TIMEOUT = 300
+BACKOFF_CAP = 10
+
+
+def log(msg: str) -> None:
+    print(f"mcpbridge: {msg}", file=sys.stderr, flush=True)
+
+
+class Retryable(Exception):
+    def __init__(self, msg: str, status: int | None = None, sent: bool = False):
+        super().__init__(msg)
+        self.status = status  # None means connection-level
+        self.sent = sent  # upstream may have acted on the request
+
+
+class Unauthorized(Exception):
+    def __init__(self, challenge: str, token: str | None):
+        super().__init__("HTTP 401")
+        self.challenge = challenge
+        self.token = token
+
+
+class AuthFailed(Exception):
+    pass
+
+
+def http_json(url: str, form: dict | None = None, body: dict | None = None) -> dict:
+    """GET (or POST form / JSON) for the OAuth endpoints. Error text carries only the
+    OAuth `error` code, because a token endpoint may echo what it was sent."""
+    data, headers = None, {"Accept": "application/json"}
+    if form is not None:
+        data = urllib.parse.urlencode({k: v for k, v in form.items() if v}).encode()
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
+    elif body is not None:
+        data = json.dumps(body).encode()
+        headers["Content-Type"] = "application/json"
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, data, headers),
+                                    timeout=30) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        if e.code in RETRY_STATUS:
+            raise Retryable(f"HTTP {e.code} from {url}", e.code) from None
+        try:
+            code = json.load(e).get("error", "")
+        except Exception:
+            code = ""
+        raise AuthFailed(f"HTTP {e.code} from {url} {code}".rstrip()) from None
+    except (OSError, http.client.HTTPException, ValueError) as e:
+        raise Retryable(f"{type(e).__name__} from {url}: {e}") from None
+
+
+def pkce_pair() -> tuple[str, str]:
+    verifier = secrets.token_urlsafe(64)
+    digest = hashlib.sha256(verifier.encode()).digest()
+    return verifier, base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+
+
+def authorize_url(st: dict, challenge: str, state: str) -> str:
+    q = {"response_type": "code", "client_id": st["client_id"],
+         "redirect_uri": redirect_uri(st["redirect_port"]),
+         "code_challenge": challenge, "code_challenge_method": "S256",
+         "state": state, "resource": st["resource"]}
+    if st.get("scopes"):
+        q["scope"] = " ".join(st["scopes"])
+    sep = "&" if "?" in st["authorization_endpoint"] else "?"
+    return st["authorization_endpoint"] + sep + urllib.parse.urlencode(q)
+
+
+def redirect_uri(port: int) -> str:
+    return f"http://127.0.0.1:{port}/callback"
+
+
+def parse_callback(query: str, state: str) -> str:
+    q = urllib.parse.parse_qs(query)
+    if "error" in q:
+        raise AuthFailed(f"authorization denied: {q['error'][0]}")
+    if q.get("state", [""])[0] != state:
+        raise AuthFailed("login callback state mismatch")
+    if not q.get("code"):
+        raise AuthFailed("login callback carried no code")
+    return q["code"][0]
+
+
+def open_browser(url: str) -> None:
+    try:
+        subprocess.run(["/usr/bin/open", url], check=True,
+                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.CalledProcessError):
+        webbrowser.open(url)
+
+
+class Callback(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):
+        u = urllib.parse.urlsplit(self.path)
+        if u.path != "/callback":
+            self.send_error(404)
+            return
+        self.server.query = u.query
+        body = b"mcpbridge: login finished, you can close this tab.\n"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+class Auth:
+    def __init__(self, url: str, opener=open_browser):
+        self.url = url
+        u = urllib.parse.urlsplit(url)
+        self.origin = f"{u.scheme}://{u.netloc}"
+        name = re.sub(r"[^A-Za-z0-9.-]+", "_", self.origin)
+        self.path = Path.home() / ".config" / "mcpbridge" / f"{name}.json"
+        self.opener = opener
+        self.lock = threading.Lock()
+        self.st: dict = {}
+        self.reload()
+
+    def reload(self) -> None:
+        try:
+            self.st = json.loads(self.path.read_text())
+        except (OSError, ValueError):
+            pass
+
+    @contextlib.contextmanager
+    def shared(self):
+        """Every Claude Code session runs its own bridge on the same token file. Take the file
+        lock and re-read, so a token another bridge just rotated is adopted, not refreshed
+        again with a refresh token the server has already retired."""
+        with self.lock:
+            self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            fd = os.open(self.path.with_suffix(".lock"), os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                self.reload()
+                yield
+            finally:
+                os.close(fd)
+
+    def save(self) -> None:
+        d = self.path.parent
+        d.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(d, 0o700)
+        fd, tmp = tempfile.mkstemp(dir=d, prefix=".tmp-")  # mkstemp creates 0600
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(self.st, f, indent=1)
+            os.replace(tmp, self.path)
+        except BaseException:
+            os.unlink(tmp)
+            raise
+
+    def token(self) -> str | None:
+        exp = self.st.get("expires_at")
+        if exp and exp < time.time() and self.st.get("refresh_token"):
+            with self.shared():
+                if self.st.get("expires_at", 0) < time.time() and self.st.get("refresh_token"):
+                    try:
+                        self.refresh()
+                    except AuthFailed as e:
+                        log(f"proactive refresh failed: {e}")
+        return self.st.get("access_token")
+
+    def on_401(self, challenge: str, used: str | None, allow_refresh: bool) -> None:
+        with self.shared():
+            if self.st.get("access_token") != used:
+                return
+            if allow_refresh and self.st.get("refresh_token"):
+                try:
+                    self.refresh()
+                    return
+                except AuthFailed as e:
+                    log(f"refresh failed ({e}); starting browser login")
+            self.login(challenge)
+
+    def discover(self, challenge: str | None) -> None:
+        path = urllib.parse.urlsplit(self.url).path.rstrip("/")
+        cands = [f"{self.origin}/.well-known/oauth-protected-resource{path}",
+                 f"{self.origin}/.well-known/oauth-protected-resource"]
+        m = re.search(r'resource_metadata="([^"]+)"', challenge or "")
+        prm = first_json(([m.group(1)] if m else []) + cands)
+        if not prm.get("authorization_servers"):
+            raise AuthFailed("protected resource metadata names no authorization server")
+        a = urllib.parse.urlsplit(prm["authorization_servers"][0])
+        root = f"{a.scheme}://{a.netloc}/.well-known/oauth-authorization-server"
+        asp = a.path.rstrip("/")
+        meta = first_json([root + asp, root] if asp else [root])
+        self.st.update(resource=prm.get("resource") or self.url,
+                       scopes=prm.get("scopes_supported"),
+                       authorization_endpoint=meta["authorization_endpoint"],
+                       token_endpoint=meta["token_endpoint"],
+                       registration_endpoint=meta.get("registration_endpoint"))
+
+    def refresh(self) -> None:
+        if not (self.st.get("token_endpoint") and self.st.get("resource")):
+            self.discover(None)
+        try:
+            tok = http_json(self.st["token_endpoint"], form={
+                "grant_type": "refresh_token", "refresh_token": self.st["refresh_token"],
+                "client_id": self.st.get("client_id"),
+                "client_secret": self.st.get("client_secret"),
+                "resource": self.st["resource"]})
+        except AuthFailed:
+            self.st.pop("refresh_token", None)
+            self.save()
+            raise
+        self.store(tok)
+        log("refreshed token")
+
+    def login(self, challenge: str | None) -> None:
+        self.discover(challenge)
+        srv = self.callback_server()
+        try:
+            verifier, chal = pkce_pair()
+            state = secrets.token_urlsafe(24)
+            url = authorize_url(self.st, chal, state)
+            log(f"login needed; opening browser (or open this URL): {url}")
+            self.opener(url)
+            srv.query, srv.timeout = None, 1
+            end = time.monotonic() + LOGIN_TIMEOUT
+            while srv.query is None and time.monotonic() < end:
+                srv.handle_request()
+            if srv.query is None:
+                raise AuthFailed(f"login not completed within {LOGIN_TIMEOUT}s")
+            code = parse_callback(srv.query, state)
+        finally:
+            srv.server_close()
+        self.store(http_json(self.st["token_endpoint"], form={
+            "grant_type": "authorization_code", "code": code,
+            "redirect_uri": redirect_uri(self.st["redirect_port"]),
+            "client_id": self.st["client_id"], "client_secret": self.st.get("client_secret"),
+            "code_verifier": verifier, "resource": self.st["resource"]}))
+        log("logged in")
+
+    def callback_server(self) -> http.server.HTTPServer:
+        # The registered redirect_uri pins the port, so reuse it while the registration lives.
+        port = self.st.get("redirect_port")
+        if self.st.get("client_id") and port:
+            try:
+                return http.server.HTTPServer(("127.0.0.1", port), Callback)
+            except OSError:
+                log(f"callback port {port} busy; registering a new client")
+        if not self.st.get("registration_endpoint"):
+            raise AuthFailed("authorization server offers no dynamic client registration")
+        srv = http.server.HTTPServer(("127.0.0.1", 0), Callback)
+        port = srv.server_address[1]
+        try:
+            reg = http_json(self.st["registration_endpoint"], body={
+                "client_name": "mcpbridge", "redirect_uris": [redirect_uri(port)],
+                "grant_types": ["authorization_code", "refresh_token"],
+                "response_types": ["code"], "token_endpoint_auth_method": "none"})
+        except BaseException:
+            srv.server_close()
+            raise
+        self.st.update(client_id=reg["client_id"], client_secret=reg.get("client_secret"),
+                       redirect_port=port)
+        self.save()
+        return srv
+
+    def store(self, tok: dict) -> None:
+        if not tok.get("access_token"):
+            raise AuthFailed("token endpoint returned no access_token")
+        self.st["access_token"] = tok["access_token"]
+        if tok.get("refresh_token"):
+            self.st["refresh_token"] = tok["refresh_token"]
+        exp = tok.get("expires_in")
+        self.st["expires_at"] = time.time() + float(exp) - 60 if exp else None
+        self.save()
+
+
+def first_json(urls: list[str]) -> dict:
+    last: Exception | None = None
+    for u in urls:
+        try:
+            return http_json(u)
+        except (AuthFailed, Retryable) as e:
+            last = e
+    # Treated as an outage: a server that only answers on an allowed network 404s every candidate.
+    raise Retryable(f"no OAuth metadata reachable: {last}")
+
+
+class Bridge:
+    def __init__(self, url: str, deadline: float, auth: Auth, out=None):
+        self.u = urllib.parse.urlsplit(url)
+        self.deadline = deadline
+        self.auth = auth
+        self.out = out or sys.stdout
+        self.out_lock = threading.Lock()
+        self.state_lock = threading.Lock()
+        self.reinit_lock = threading.Lock()
+        self.session_id: str | None = None
+        self.proto: str | None = None
+        self.stale = False
+        self.init_req: dict | None = None
+        self.initialized: dict | None = None
+        self.reinits = 0
+
+    def write(self, msg: dict) -> None:
+        line = json.dumps(msg, separators=(",", ":")) + "\n"
+        with self.out_lock:
+            self.out.write(line)
+            self.out.flush()
+
+    def handle(self, msg: dict) -> None:
+        method = msg.get("method")
+        if method == "initialize":
+            self.init_req = msg
+        elif method == "notifications/initialized":
+            self.initialized = msg
+        try:
+            self.deliver(msg)
+        except Exception as e:
+            log(f"{method or 'response'} {msg.get('id', '')}: {e}")
+            if method and "id" in msg:
+                self.write({"jsonrpc": "2.0", "id": msg["id"],
+                            "error": {"code": -32000, "message": str(e)}})
+
+    def deliver(self, msg: dict) -> None:
+        is_init = msg.get("method") == "initialize"
+        start, delay, auth_tries, challenge = time.monotonic(), 1.0, 0, None
+        while True:
+            sid = None
+            try:
+                if challenge is not None:
+                    self.auth.on_401(challenge.challenge, challenge.token, auth_tries == 1)
+                    challenge, start, delay = None, time.monotonic(), 1.0
+                if not is_init:
+                    self.ensure_session()
+                sid = self.session_id
+                self.post(msg, sid, forward=True)
+                return
+            except Unauthorized as e:
+                auth_tries += 1
+                if auth_tries > 2:
+                    raise AuthFailed("upstream still answers 401 after a new token") from None
+                challenge = e
+                continue
+            except Retryable as e:
+                last = e
+                if e.sent and msg.get("method") == "tools/call":
+                    # A tool may write; running it twice is worse than one error.
+                    raise RuntimeError(f"{e} after the call reached upstream; "
+                                       "not retried, the tool may have run") from None
+                if sid and e.status in (404, None):
+                    self.mark_stale(sid)
+            elapsed = time.monotonic() - start
+            if elapsed >= self.deadline:
+                raise Retryable(f"upstream unreachable for {int(elapsed)}s: {last}")
+            log(f"{last}; holding {msg.get('method')} {msg.get('id', '')}, retry in {delay:g}s")
+            time.sleep(min(delay, self.deadline - elapsed))
+            delay = min(delay * 2, BACKOFF_CAP)
+
+    def mark_stale(self, sid: str) -> None:
+        with self.state_lock:
+            if sid == self.session_id:
+                self.stale = True
+
+    def ensure_session(self) -> None:
+        if not self.stale:
+            return
+        with self.reinit_lock:
+            if not self.stale:
+                return
+            with self.state_lock:
+                self.session_id = None
+            self.reinits += 1
+            init = dict(self.init_req, id=f"mcpbridge-reinit-{self.reinits}")
+            resp = self.post(init, None, forward=False)
+            if not resp or "result" not in resp:
+                raise Retryable(f"re-initialize answered without a result: {resp}")
+            if self.initialized:
+                self.post(self.initialized, self.session_id, forward=False)
+            with self.state_lock:
+                self.stale = False
+            log("re-initialised upstream session")
+
+    def post(self, msg: dict, sid: str | None, forward: bool) -> dict | None:
+        """Send one message; return the JSON-RPC response to it, if it is a request."""
+        cls = (http.client.HTTPSConnection if self.u.scheme == "https"
+               else http.client.HTTPConnection)
+        conn = cls(self.u.hostname, self.u.port, timeout=CONNECT_TIMEOUT)
+        headers = {"Content-Type": "application/json",
+                   "Accept": "application/json, text/event-stream"}
+        if sid:
+            headers["Mcp-Session-Id"] = sid
+        if self.proto:
+            headers["MCP-Protocol-Version"] = self.proto
+        tok = self.auth.token()
+        if tok:
+            headers["Authorization"] = f"Bearer {tok}"
+        is_init = msg.get("method") == "initialize"
+        want = msg.get("id") if msg.get("method") else None
+        sent = False
+        try:
+            conn.connect()
+            conn.sock.settimeout(READ_TIMEOUT)
+            conn.request("POST", self.u.path or "/", json.dumps(msg).encode(), headers)
+            sent = True
+            r = conn.getresponse()
+            if r.status == 401:
+                raise Unauthorized(r.getheader("WWW-Authenticate", ""), tok)
+            if r.status in RETRY_STATUS:
+                # 404 (blocked network, unknown session) and 503 (no backend) never reach the app.
+                raise Retryable(f"HTTP {r.status}", r.status, sent=r.status in (502, 504))
+            if is_init:
+                self.session_id = r.getheader("Mcp-Session-Id")
+            if r.status == 202:
+                return None
+            ctype = r.getheader("Content-Type", "")
+            if r.status < 400 and "text/event-stream" in ctype:
+                resp = self.read_sse(r, want, forward)
+            else:
+                raw = r.read()
+                try:
+                    data = json.loads(raw) if raw.strip() else []
+                except ValueError:
+                    if r.status >= 400:
+                        raise RuntimeError(f"upstream HTTP {r.status}: "
+                                           f"{raw[:200].decode(errors='replace')}") from None
+                    raise
+                resp = None
+                for m in data if isinstance(data, list) else [data]:
+                    if forward:
+                        self.write(m)
+                    if is_response(m, want):
+                        resp = m
+                if r.status >= 400 and resp is None and want is not None:
+                    raise RuntimeError(f"upstream HTTP {r.status}")
+            if is_init and resp and isinstance(resp.get("result"), dict):
+                self.proto = resp["result"].get("protocolVersion") or self.proto
+            return resp
+        except (OSError, http.client.HTTPException, ValueError) as e:
+            raise Retryable(f"{type(e).__name__}: {e}", sent=sent) from None
+        finally:
+            conn.close()
+
+    def read_sse(self, r, want, forward: bool) -> dict | None:
+        data: list[str] = []
+        for raw in r:
+            line = raw.decode().rstrip("\r\n")
+            if line.startswith("data:"):
+                v = line[5:]
+                data.append(v[1:] if v.startswith(" ") else v)
+            elif not line and data:
+                m = json.loads("\n".join(data))
+                data = []
+                if forward:
+                    self.write(m)
+                if is_response(m, want):
+                    return m
+        if want is not None:
+            raise Retryable("event stream ended before the response", sent=True)
+        return None
+
+
+def is_response(m, want) -> bool:
+    return (want is not None and isinstance(m, dict) and "method" not in m
+            and m.get("id") == want and ("result" in m or "error" in m))
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(prog="mcpbridge", description=__doc__.split("\n\n")[0])
+    ap.add_argument("url", help="streamable-HTTP MCP endpoint, e.g. https://example.com/mcp")
+    ap.add_argument("--deadline", type=float, default=120,
+                    help="seconds to hold a call while upstream is unreachable (default 120)")
+    ap.add_argument("--logout", action="store_true", help="delete stored tokens for the URL's origin")
+    a = ap.parse_args(argv)
+    if urllib.parse.urlsplit(a.url).scheme not in ("http", "https"):
+        ap.error("url must be http(s)")
+    auth = Auth(a.url)
+    if a.logout:
+        auth.path.unlink(missing_ok=True)
+        log(f"removed {auth.path}")
+        return 0
+    bridge = Bridge(a.url, a.deadline, auth)
+    # shortcut: no GET event stream, so server-initiated messages arrive only inside a
+    # request's SSE response; add the GET stream when a server sends unsolicited notifications.
+    for raw in sys.stdin.buffer:
+        if not raw.strip():
+            continue
+        try:
+            msg = json.loads(raw)
+        except ValueError:
+            log("ignoring a stdin line that is not JSON")
+            continue
+        if not isinstance(msg, dict):
+            log("ignoring a stdin message that is not a JSON object")
+        elif msg.get("method") in ("initialize", "notifications/initialized"):
+            bridge.handle(msg)
+        else:
+            threading.Thread(target=bridge.handle, args=(msg,), daemon=True).start()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

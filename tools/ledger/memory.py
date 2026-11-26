@@ -1,5 +1,6 @@
-#!/usr/bin/env python3
-"""Transactional CLI for Claude Code's memory files — SQLite is the source of truth.
+#!/bin/sh
+''''exec "${0%/*}/../../lib/python3" "$0" "$@" # ''' # sh runs this line (lib/python3 picks the interpreter); Python reads a string
+__doc__ = """Transactional CLI for Claude Code's memory files — SQLite is the source of truth.
 
 The harness loads `MEMORY.md` off disk and recalls `memory/<name>.md` bodies, so
 the files must keep existing: they are GENERATED MIRRORS. Every write lands in
@@ -17,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.dont_write_bytecode = True  # no __pycache__ inside the installed kit folder
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # -I leaves the script folder off sys.path
 import todo  # noqa: E402  same database, same connection rules
 
 PROJECTS = Path.home() / ".claude" / "projects"

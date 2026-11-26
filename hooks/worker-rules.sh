@@ -6,7 +6,7 @@ cat >/dev/null
 f=${KIT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/prosper-agentkit}/worker-rules.md
 [[ -f $f && -s $f ]] || exit 0
 # Cap at 16 KB, cut at a line end, so a huge file cannot flood every worker.
-/usr/bin/python3 -Ic 'import json,sys
+"${0%/*}/../lib/python3" -c 'import json,sys
 cap = 16384
 with open(sys.argv[1], "rb") as fh:
     b = fh.read(cap + 1)

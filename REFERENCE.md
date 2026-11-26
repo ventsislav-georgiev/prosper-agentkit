@@ -60,6 +60,20 @@ piece: you can switch any piece off on the install sheet and keep the rest.
   `data:`, `done:`, `ask:`, `warn:`, `fix:` and `link:` line markers add an emoji, `owner/repo#N` becomes a pull
   request link once `github_url` is set, money and numbers with a unit go in backticks, and it refuses a bare `#N`, a repeated line, more
   than 6 lines or more than 3 markers. `--selftest` checks it.
+- `mcpbridge-tools`: the `mcpbridge` command in the kit's bin folder, a stdio MCP server that relays to a remote
+  streamable-HTTP MCP server and survives network switches. `mcpbridge <url> [--deadline SECONDS]` (default 120)
+  holds each call while the server is unreachable (connection errors, DNS, timeouts, HTTP 404, 502, 503 and 504) and
+  retries it with a 1, 2, 4, up to 10 s backoff, re-initialising the MCP session from the client's cached
+  `initialize` once the server is back. A call still failing at the deadline gets a JSON-RPC error (`-32000`) and the
+  next call is served as normal. A `tools/call` that may already have reached the server (read timeout, stream cut
+  mid-response, HTTP 502 or 504) is answered with an error and not retried. Auth is MCP OAuth 2.1 (protected-resource
+  metadata, dynamic client registration, PKCE S256, the RFC 8707 `resource`): the first 401 opens a browser and holds
+  the call up to 300 s, later tokens are refreshed without asking. Tokens live in
+  `~/.config/mcpbridge/<origin>.json` (folder 0700, file 0600, atomic writes, a lock file shared by every running
+  bridge) and never go to logs, argv or URLs. `mcpbridge --logout <url>` deletes them. Use it as an MCP server entry:
+  `"command": "<kit bin>/mcpbridge", "args": ["https://example.com/mcp"]`. If the first login takes longer than
+  Claude Code's MCP startup timeout, reconnect with `/mcp` once the browser says it is done, or start Claude Code
+  once with `MCP_TIMEOUT=300000`.
 - `hud`: Claude Code's status line, run with `node` (22.13 or later, for `node:sqlite`). It lists the session's open
   tasks and the ledger entries of the current project, read from the kit's ledger database (`LEDGER_DB` wins, as for
   `todo.py`), with a live-worker count; per-item rows and counts are off until `OMC_HUD_TASK_ROWS=1` or
@@ -137,7 +151,10 @@ poll every 5 minutes or less and exit when the subject reaches an end state.
 
 - Prosper 2.175.0 or later.
 - Claude Code.
-- `sh`, `bash`, `python3` and `awk` on PATH. The hooks use `jq` when it is on PATH and `python3` otherwise.
+- `sh`, `bash`, `python3` and `awk` on PATH. The hooks use `jq` when it is on PATH and `python3` otherwise. Every kit
+  script starts Python through `lib/python3`: `/usr/bin/python3 -I` when the Command Line Tools or Xcode back it
+  (without them it is a stub that opens an install prompt), else `python3 -I` on PATH. A pyenv, asdf or conda shim
+  on PATH adds about 0.3 s to every start, so the hooks skip it when they can.
 - For the `hud` status line: `node` 22.13 or later on PATH.
 - For the monitors: `gh` signed in, `jq` and `curl` (`pr-watch.sh`, `gh-run-watch.sh`) and `kubectl`
   (`k8s-deploy-watch.sh`).
@@ -217,5 +234,6 @@ keeps the bypass-permissions mode from being turned on, so the guards and deny r
 Remove the kit in Prosper. It takes out the import line, the hooks, the status line (your own comes back), the
 permission rules it added, the tools in its bin folder and the agent files it wrote. Your `local.md` stays, and so do
 the three `.example` files, your `removeguard.conf` and `prodguard.conf`, the ledger database and the HUD's files in
-the kit's state folder, the compaction archives, the memory files `memory.py` wrote, your `.pre` and `.post` scripts, an agent file you edited, and any recommended settings you pasted
+the kit's state folder, the compaction archives, the memory files `memory.py` wrote, the tokens `mcpbridge` stored in
+`~/.config/mcpbridge/` (`mcpbridge --logout <url>` first removes them), your `.pre` and `.post` scripts, an agent file you edited, and any recommended settings you pasted
 into `~/.claude/settings.json` by hand (take those out yourself).

@@ -1,0 +1,7 @@
+#!/bin/sh
+# The kit's one way to start Python: /usr/bin/python3 -I when a developer folder backs it, else python3 -I on PATH.
+# PATH first would pay a pyenv, asdf or conda shim on every hook call (about 0.3 s each). On a Mac without the Command
+# Line Tools /usr/bin/python3 is a stub that opens an install prompt, hence the check. -I drops PYTHONPATH and the
+# script's folder from sys.path: a script that imports a sibling adds its own folder.
+d=$(/usr/bin/xcode-select -p 2>/dev/null) && [ -x "$d/usr/bin/python3" ] && exec /usr/bin/python3 -I "$@"
+exec python3 -I "$@"

@@ -282,6 +282,6 @@ cmd=$(jq -r '.tool_input.command // empty' <<<"$input" 2>/dev/null) || cmd=$inpu
 case $cmd in *rm* | *unlink* | *delete* | *xargs*) ;; *) exit 0 ;; esac
 # The deny text names saferm: the KIT_BIN shim under the kit, else the kit copy next to this hook.
 sr=${KIT_BIN:-$(cd "$(dirname "$0")/../tools/removeguard" 2>/dev/null && pwd)}
-out=$(/usr/bin/python3 -I -c "$PY" "$sr" <<<"$input" 2>/dev/null) || exit 0
+out=$("${0%/*}/../lib/python3" -c "$PY" "$sr" <<<"$input" 2>/dev/null) || exit 0
 [[ -z $out ]] || echo "$out"
 exit 0

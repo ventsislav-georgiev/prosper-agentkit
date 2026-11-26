@@ -3,7 +3,7 @@ id          = "io.github.ventsislav-georgiev.prosper-agentkit"
 name        = "prosper-agentkit"
 title       = "Prosper Agent Kit"
 description = "Guard hooks, safe defaults and named workers for Claude Code."
-version     = "0.2.7"
+version     = "0.2.8"
 author      = "Ventsislav Georgiev"
 license     = "MIT"
 
@@ -125,6 +125,11 @@ dir  = "tools/monitors"
 id   = "slack-tools"
 kind = "tools"
 dir  = "tools/slack"
+
+[[contributes.kit.pieces]]
+id   = "mcpbridge-tools"
+kind = "tools"
+dir  = "tools/mcpbridge"
 
 [[contributes.kit.pieces]]
 id          = "hud"
