@@ -6,7 +6,7 @@ input=$(</dev/stdin)
 case $input in *pkill* | *killall*) ;; *) exit 0 ;; esac
 # jq when it is on PATH, else python3: the kit does not require jq.
 cmd=$(jq -r '.tool_input.command // empty' <<<"$input" 2>/dev/null) ||
-  cmd=$("${0%/*}/../lib/python3" -c 'import json,sys; print((json.load(sys.stdin).get("tool_input") or {}).get("command") or "")' <<<"$input" 2>/dev/null) ||
+  cmd=$("${0%"${0##*/}"}../lib/python3" -c 'import json,sys; print((json.load(sys.stdin).get("tool_input") or {}).get("command") or "")' <<<"$input" 2>/dev/null) ||
   exit 0
 [[ -n $cmd ]] || exit 0
 
@@ -15,8 +15,8 @@ LC_ALL=C /usr/bin/grep -Eq "$RUN" <<<"$cmd" || exit 0
 
 # Under the kit, safekill is the KIT_BIN shim; run standalone, it is the kit copy next to this hook.
 sk=${KIT_BIN:+$KIT_BIN/safekill}
-sk=${sk:-$(cd "$(dirname "$0")/../tools/killguard" 2>/dev/null && pwd)/safekill}
+sk=${sk:-$(cd "${0%"${0##*/}"}../tools/killguard" 2>/dev/null && pwd)/safekill}
 reason="killguard: pkill and killall are not allowed (a pattern kill takes down every process whose command line matches, other sessions included). Kill the pid you recorded with \$! (kill <pid>), or run $sk -n '<pattern>' to list the matches, then $sk '<pattern>'."
 jq -nc --arg r "$reason" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}' 2>/dev/null ||
-  "${0%/*}/../lib/python3" -c 'import json,sys; print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": sys.argv[1]}}))' "$reason" 2>/dev/null ||
+  "${0%"${0##*/}"}../lib/python3" -c 'import json,sys; print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": sys.argv[1]}}))' "$reason" 2>/dev/null ||
   { echo "$reason" >&2; exit 2; }

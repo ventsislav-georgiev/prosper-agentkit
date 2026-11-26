@@ -1,5 +1,5 @@
 #!/bin/sh
-''''exec "${0%/*}/../../lib/python3" "$0" "$@" # ''' # sh runs this line (lib/python3 picks the interpreter); Python reads a string
+''''exec "${0%"${0##*/}"}../../lib/python3" "$0" "$@" # ''' # sh runs this line (lib/python3 picks the interpreter); Python reads a string
 __doc__ = """Transactional CLI for Claude Code's memory files — SQLite is the source of truth.
 
 The harness loads `MEMORY.md` off disk and recalls `memory/<name>.md` bodies, so

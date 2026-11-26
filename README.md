@@ -117,6 +117,40 @@ a server that needs a login it runs the MCP OAuth flow in your browser once and 
 "my-server": { "command": "<kit bin>/mcpbridge", "args": ["https://example.com/mcp"] }
 ```
 
+### Startup context
+
+Every session pays for its system prompt, tool list, MCP servers, skills listing and CLAUDE.md files before your first
+message, and it pays again on every turn. To trim it, measure first, then switch off what you never call:
+
+1. Measure with `ctxprobe.sh` (`spend-tools`): `ctxprobe.sh ~/src/app` prints the starting tokens of a fresh session in
+   that folder. Run it again with one variant, such as `ctxprobe.sh ~/src/app --disable-slash-commands` (no skills) or
+   `--settings '{"enabledPlugins":{"name@marketplace":false}}'` (one plugin off); the difference is what that thing
+   costs. Each run is one small real model call.
+2. Find what you never use with `usage-audit.py [days]`: built-in tool calls, MCP calls per server and per project, and
+   Skill calls from your transcripts of the last 14 days.
+3. Switch off the plugins you never call (`/plugin`, or `enabledPlugins` in `~/.claude/settings.json`). Deny an MCP
+   server in the projects that never use it: a `permissions.deny` rule in that project's `.claude/settings.local.json`
+   naming the server the way Claude Code's MCP permission rules do (`mcp`, two underscores, the server name). Copy the `permissions.deny` list from `settings-recommended.example.json` to drop the built-in tools few sessions call.
+
+The skills listing has a size budget: past it Claude Code shortens the descriptions, so dropping one skill saves less
+than its size. Measure before and after rather than adding up file sizes.
+
+The kit's `settings-recommended.example.json` (in the kit's config folder) lists deny rules for these built-in tools,
+about 3.4k fewer tokens at every session start. They are not applied for you: merge the ones you want into
+`~/.claude/settings.json`.
+
+| Tool | What it is for |
+|---|---|
+| `EnterPlanMode`, `ExitPlanMode` | plan mode: the model writes a plan and waits for your approval; denying them turns plan mode off |
+| `EnterWorktree`, `ExitWorktree` | move the session into a new git worktree and back |
+| `NotebookEdit` | edit cells of a Jupyter notebook |
+| `Workflow` | run a saved multi-step workflow |
+| `ReportFindings` | hand back structured findings from a review run |
+| `ShareOnboardingGuide` | share an onboarding guide for a repository with teammates |
+| `DesignSync` | sync designs from a design tool into the session |
+| `PublishPlugin` | publish a plugin to a marketplace |
+| `RemoteTrigger` | create and run scheduled remote agents |
+
 ### Safety guards
 
 | Guard | What it stops | What to use instead |
@@ -173,11 +207,13 @@ the supervisor:
 | `removeguard-tools`, `-hook`, `-rules` | `saferm`, a hook denying unsafe recursive deletes, and the matching rules |
 | `prodguard-tools`, `-hook`, `-rules` | guarded cloud CLIs, a hook denying the ways around them, and the matching rules |
 | `compactguard-hook`, `-rules` | a `PreCompact` hook that caps the summary, and the matching rules |
-| `worker-rules-hook` | a `SubagentStart` hook that hands your `worker-rules.md` to every subagent |
+| `worker-rules-hook` | a `SubagentStart` hook that hands your `worker-rules.md`, or the kit's lean-code rules, to every subagent |
+| `lean-code-rules` | the same lean-code rules for your own sessions |
 | `ledger-tools` | `todo.py` and `memory.py` over one SQLite database |
 | `monitors-tools` | `pr-watch.sh`, `gh-run-watch.sh` and `k8s-deploy-watch.sh` |
 | `slack-tools` | `slack-say.py` |
 | `mcpbridge-tools` | `mcpbridge`, a stdio MCP server that keeps a remote MCP server's calls alive across network switches |
+| `spend-tools` | `ctxprobe.sh` and `usage-audit.py`, to measure a session's starting tokens and find what you never use |
 | `hud` | a status line with tasks, ledger entries and live workers |
 | `prs-hook` | feeds pull requests from `gh pr create` into the status line |
 | `guard-examples` | example config files for the guards and recommended settings |
@@ -199,7 +235,8 @@ Each piece is described in full in [REFERENCE.md](REFERENCE.md#what-it-changes).
 
 - Your own instructions go in `~/.config/prosper-agentkit/local.md`. It is read last and the kit never overwrites it.
 - Rules every worker should get go in `~/.config/prosper-agentkit/worker-rules.md`; the `worker-rules-hook` piece hands
-  them to each subagent at start.
+  them to each subagent at start. Without that file workers get the kit's lean-code rules; your file replaces them
+  whole, and an empty file sends nothing.
 - Production targets go in `prodguard.conf`, and delete scopes in `removeguard.conf`, both in the same folder. The
   examples are copied there for you.
 - Run your own script before or after any hook or tool with a `<name>.pre` or `<name>.post` file in

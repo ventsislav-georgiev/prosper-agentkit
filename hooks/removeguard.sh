@@ -281,7 +281,7 @@ cmd=$(jq -r '.tool_input.command // empty' <<<"$input" 2>/dev/null) || cmd=$inpu
 # rm covers rmdir and rmtree; every delete the python check knows names one of these.
 case $cmd in *rm* | *unlink* | *delete* | *xargs*) ;; *) exit 0 ;; esac
 # The deny text names saferm: the KIT_BIN shim under the kit, else the kit copy next to this hook.
-sr=${KIT_BIN:-$(cd "$(dirname "$0")/../tools/removeguard" 2>/dev/null && pwd)}
-out=$("${0%/*}/../lib/python3" -c "$PY" "$sr" <<<"$input" 2>/dev/null) || exit 0
+sr=${KIT_BIN:-$(cd "${0%"${0##*/}"}../tools/removeguard" 2>/dev/null && pwd)}
+out=$("${0%"${0##*/}"}../lib/python3" -c "$PY" "$sr" <<<"$input" 2>/dev/null) || exit 0
 [[ -z $out ]] || echo "$out"
 exit 0

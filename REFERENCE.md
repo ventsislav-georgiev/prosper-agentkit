@@ -44,8 +44,14 @@ piece: you can switch any piece off on the install sheet and keep the rest.
   finished work. Needs `compactguard-hook`.
 - `worker-rules-hook`: a `SubagentStart` hook that hands `worker-rules.md` from the kit's config folder
   (`~/.config/prosper-agentkit/worker-rules.md`) to every subagent at start, as added context. Workers run without the
-  CLAUDE.md files, so this is the one place for rules all of them share. With no file or an empty one it prints
-  nothing; it sends at most 16 KB, cut at a line end, and never blocks a subagent.
+  CLAUDE.md files, so this is the one place for rules all of them share. With no file it sends the kit's
+  `rules/lean-code.md` (the `lean-code-rules` text); your file replaces it whole, never merged. An empty or
+  whitespace-only file sends nothing, which is how to switch the default off for workers. It sends at most 16 KB, cut
+  at a line end, and never blocks a subagent.
+- `lean-code-rules`: instruction text from `rules/lean-code.md`, condensed from the ponytail plugin: the smallest change
+  that fully solves the task, reuse before new code, no unasked-for abstraction, a check for new logic, and a closing
+  line on what was skipped. It is the same file the `worker-rules-hook` sends by default, so main sessions and workers
+  get one text without a `local.md` import.
 - `ledger-tools`: the `todo.py` and `memory.py` commands in the kit's bin folder. `todo.py` keeps per-project work
   ledgers (entries, status lines, rounds, operator questions) in one SQLite database; every write takes
   `--expect-version` and refuses a stale one with exit 3, and needs a writer name (`--actor` or `LEDGER_ACTOR`).
@@ -74,6 +80,13 @@ piece: you can switch any piece off on the install sheet and keep the rest.
   `"command": "<kit bin>/mcpbridge", "args": ["https://example.com/mcp"]`. If the first login takes longer than
   Claude Code's MCP startup timeout, reconnect with `/mcp` once the browser says it is done, or start Claude Code
   once with `MCP_TIMEOUT=300000`.
+- `spend-tools`: two commands in the kit's bin folder for trimming what a session pays at start (see Startup context
+  in README.md). `ctxprobe.sh [dir] [claude args...]` runs one `claude -p` with a one-word reply in `dir` (default: a
+  fresh empty temp folder, removed after) and prints its input plus cache read plus cache write tokens; extra args
+  measure a variant (`--settings '{...}'`, `--disable-slash-commands`, `--strict-mcp-config`). It needs `claude` and `jq`, makes one small real model call, and exits 1 when the reply has
+  no usage. `usage-audit.py [days] [--root DIR]` reads the transcripts changed in the last `days` (default 14) under
+  `--root`, else `$CLAUDE_CONFIG_DIR/projects`, else `~/.claude/projects`, and prints built-in tool calls, MCP calls
+  per server and per project folder, and Skill calls. It reads only and skips lines that are not JSON.
 - `hud`: Claude Code's status line, run with `node` (22.13 or later, for `node:sqlite`). It lists the session's open
   tasks and the ledger entries of the current project, read from the kit's ledger database (`LEDGER_DB` wins, as for
   `todo.py`), with a live-worker count; per-item rows and counts are off until `OMC_HUD_TASK_ROWS=1` or
@@ -164,7 +177,8 @@ poll every 5 minutes or less and exit when the subject reaches an end state.
 - Put your own instructions in `local.md` in the kit's config folder (`~/.config/prosper-agentkit/local.md`). It is
   read last and the kit never overwrites it.
 - Rules every worker should get go in `worker-rules.md` in the same folder; the `worker-rules-hook` piece hands them
-  to each subagent at start (workers do not read `local.md`).
+  to each subagent at start (workers do not read `local.md`). Without the file workers get the kit's lean-code rules;
+  your file replaces them whole, and an empty file sends nothing. For main sessions, switch `lean-code-rules` off.
 - To move a worker to a newer model, edit the `model:` line of its agent file in `~/.claude/agents/`. The file is then
   yours: Prosper keeps an edited file and reports it instead of replacing it.
 - removeguard: copy `removeguard.conf.example` to `removeguard.conf` in the kit's config folder
@@ -190,7 +204,7 @@ poll every 5 minutes or less and exit when the subject reaches an end state.
 - Run your own script before or after any hook or tool: put an executable file named `<name>.pre` or `<name>.post` in
   `~/.config/prosper-agentkit/hooks/`. `<name>` is the piece id for a hook or the status line (`killguard-hook`,
   `removeguard-hook`, `prodguard-hook`, `compactguard-hook`, `worker-rules-hook`, `prs-hook`, `hud`) and the command name for a tool (`safekill`,
-  `saferm`, `gcloud`, `aws`, `kubectl`, `terraform`, `tofu`, `todo.py`, `memory.py`, `pr-watch.sh`, `gh-run-watch.sh`, `k8s-deploy-watch.sh`, `slack-say.py`). A `.pre`
+  `saferm`, `gcloud`, `aws`, `kubectl`, `terraform`, `tofu`, `todo.py`, `memory.py`, `pr-watch.sh`, `gh-run-watch.sh`, `k8s-deploy-watch.sh`, `slack-say.py`, `ctxprobe.sh`, `usage-audit.py`). A `.pre`
   that exits non-zero stops the run (exit 2 blocks the tool call for a hook); a `.post` sees
   `KIT_STATUS` and cannot change the output. Prosper runs only a regular file you own that is not group- or
   world-writable.
@@ -219,7 +233,20 @@ A kit cannot write `env` or other settings keys, so these stay a suggestion you 
     "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "300000"
   },
   "permissions": {
-    "disableBypassPermissionsMode": "disable"
+    "disableBypassPermissionsMode": "disable",
+    "deny": [
+      "DesignSync",
+      "EnterPlanMode",
+      "EnterWorktree",
+      "ExitPlanMode",
+      "ExitWorktree",
+      "NotebookEdit",
+      "PublishPlugin",
+      "RemoteTrigger",
+      "ReportFindings",
+      "ShareOnboardingGuide",
+      "Workflow"
+    ]
   }
 }
 ```
@@ -227,7 +254,9 @@ A kit cannot write `env` or other settings keys, so these stay a suggestion you 
 The first five turn off telemetry, error reports, feedback surveys and other non-essential calls. The next seven set
 the working style: auto mode, background tasks, the short system prompt, no git instructions, no agent view, tool
 search on and claude.ai MCP servers off. The last one sets the auto-compact window: 250000 compacted about twice as often, 300000 is the chosen balance. `disableBypassPermissionsMode`
-keeps the bypass-permissions mode from being turned on, so the guards and deny rules always apply.
+keeps the bypass-permissions mode from being turned on, so the guards and deny rules always apply. The `deny` list drops built-in tools few sessions call, about 3.4k fewer tokens at every
+session start; `EnterPlanMode` and `ExitPlanMode` take plan mode with them. README.md (Startup context) says what each
+tool is for: keep the ones you use.
 
 ## Remove
 

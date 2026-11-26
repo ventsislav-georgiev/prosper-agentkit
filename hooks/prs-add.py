@@ -1,5 +1,5 @@
 #!/bin/sh
-''''exec "${0%/*}/../lib/python3" "$0" "$@" # ''' # sh runs this line (lib/python3 picks the interpreter); Python reads a string
+''''exec "${0%"${0##*/}"}../lib/python3" "$0" "$@" # ''' # sh runs this line (lib/python3 picks the interpreter); Python reads a string
 """PostToolUse hook for Bash: feeds the status line's pull request panel.
 
 When a `gh pr create` command finishes, each pull request URL it printed (https, a host with no user or port, then

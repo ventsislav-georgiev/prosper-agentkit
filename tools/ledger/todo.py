@@ -1,5 +1,5 @@
 #!/bin/sh
-''''exec "${0%/*}/../../lib/python3" "$0" "$@" # ''' # sh runs this line (lib/python3 picks the interpreter); Python reads a string
+''''exec "${0%"${0##*/}"}../../lib/python3" "$0" "$@" # ''' # sh runs this line (lib/python3 picks the interpreter); Python reads a string
 __doc__ = """Transactional CLI for the todo ledgers — one SQLite DB, every project.
 
 Replaces a markdown `todos.md` per project. The markdown prose survives as the

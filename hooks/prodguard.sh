@@ -16,7 +16,7 @@ input=$(</dev/stdin)
 case $input in *kubectl* | *kubernetes* | *gcloud* | *google-cloud* | *aws* | *terraform* | *tofu* | *make* | *EXPLICIT_OPERATOR*) ;; *) exit 0 ;; esac
 # jq when it is on PATH, else python3: the kit does not require jq.
 cmd=$(jq -r '.tool_input.command // empty' <<<"$input" 2>/dev/null) ||
-  cmd=$("${0%/*}/../lib/python3" -c 'import json,sys; print((json.load(sys.stdin).get("tool_input") or {}).get("command") or "")' <<<"$input" 2>/dev/null) ||
+  cmd=$("${0%"${0##*/}"}../lib/python3" -c 'import json,sys; print((json.load(sys.stdin).get("tool_input") or {}).get("command") or "")' <<<"$input" 2>/dev/null) ||
   exit 0
 [[ -n $cmd ]] || exit 0
 
@@ -252,5 +252,5 @@ else
   exit 0
 fi
 jq -nc --arg r "$reason" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}' 2>/dev/null ||
-  "${0%/*}/../lib/python3" -c 'import json,sys; print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": sys.argv[1]}}))' "$reason" 2>/dev/null ||
+  "${0%"${0##*/}"}../lib/python3" -c 'import json,sys; print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": sys.argv[1]}}))' "$reason" 2>/dev/null ||
   { echo "$reason" >&2; exit 2; }

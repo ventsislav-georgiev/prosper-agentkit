@@ -1,5 +1,5 @@
 #!/bin/sh
-''''exec "${0%/*}/../lib/python3" "$0" "$@" # ''' # sh runs this line (lib/python3 picks the interpreter); Python reads a string
+''''exec "${0%"${0##*/}"}../lib/python3" "$0" "$@" # ''' # sh runs this line (lib/python3 picks the interpreter); Python reads a string
 """PreCompact hook: keeps a session's compaction summary from growing without bound.
 
 A summary is copied forward on every compaction, so anything it restates is paid for again each

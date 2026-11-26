@@ -1,5 +1,5 @@
 #!/bin/sh
-''''exec "${0%/*}/../../lib/python3" "$0" "$@" # ''' # sh runs this line (lib/python3 picks the interpreter); Python reads a string
+''''exec "${0%"${0##*/}"}../../lib/python3" "$0" "$@" # ''' # sh runs this line (lib/python3 picks the interpreter); Python reads a string
 from __future__ import annotations
 
 __doc__ = """mcpbridge -- a stdio MCP server that relays to a remote streamable-HTTP MCP server
@@ -26,6 +26,9 @@ running for the next call.
 Auth is the MCP OAuth 2.1 flow (PRM discovery, dynamic client registration,
 PKCE, RFC 8707 resource). Tokens go to ~/.config/mcpbridge/<origin>.json
 (0600) and are never logged. The first login opens a browser.
+A URL from config or from a server (resource_metadata, authorization, token and
+registration endpoints) must be https, or http to 127.0.0.1, localhost or ::1;
+anything else is refused before it is fetched or opened.
 """
 
 import argparse
@@ -79,9 +82,30 @@ class AuthFailed(Exception):
     pass
 
 
+def check_url(url: str, what: str) -> str:
+    """Accept a URL the bridge was told (by config or a server) only when it is https, or http to
+    loopback. The error names scheme and host only: a URL may carry a token in its query."""
+    u = urllib.parse.urlsplit(url)
+    try:
+        host = u.hostname
+    except ValueError:
+        host = None
+    if not (u.scheme == "https" and host or u.scheme == "http" and host in ("127.0.0.1", "localhost", "::1")):
+        raise AuthFailed(f"refusing {what}: scheme {u.scheme!r}, host {host!r} "
+                         "(https, or http to 127.0.0.1/localhost/::1, only)")
+    return url
+
+
+class CheckedRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        check_url(urllib.parse.urljoin(req.full_url, newurl), "redirect")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def http_json(url: str, form: dict | None = None, body: dict | None = None) -> dict:
     """GET (or POST form / JSON) for the OAuth endpoints. Error text carries only the
     OAuth `error` code, because a token endpoint may echo what it was sent."""
+    check_url(url, "OAuth URL")
     data, headers = None, {"Accept": "application/json"}
     if form is not None:
         data = urllib.parse.urlencode({k: v for k, v in form.items() if v}).encode()
@@ -90,8 +114,8 @@ def http_json(url: str, form: dict | None = None, body: dict | None = None) -> d
         data = json.dumps(body).encode()
         headers["Content-Type"] = "application/json"
     try:
-        with urllib.request.urlopen(urllib.request.Request(url, data, headers),
-                                    timeout=30) as r:
+        with urllib.request.build_opener(CheckedRedirect).open(
+                urllib.request.Request(url, data, headers), timeout=30) as r:
             return json.load(r)
     except urllib.error.HTTPError as e:
         if e.code in RETRY_STATUS:
@@ -118,6 +142,7 @@ def authorize_url(st: dict, challenge: str, state: str) -> str:
          "state": state, "resource": st["resource"]}
     if st.get("scopes"):
         q["scope"] = " ".join(st["scopes"])
+    check_url(st["authorization_endpoint"], "authorization_endpoint")
     sep = "&" if "?" in st["authorization_endpoint"] else "?"
     return st["authorization_endpoint"] + sep + urllib.parse.urlencode(q)
 
@@ -154,6 +179,9 @@ class Callback(http.server.BaseHTTPRequestHandler):
         u = urllib.parse.urlsplit(self.path)
         if u.path != "/callback":
             self.send_error(404)
+            return
+        if urllib.parse.parse_qs(u.query).get("state", [""])[0] != self.server.state:
+            self.send_error(400, "state mismatch")  # a stray request must not end the login
             return
         self.server.query = u.query
         body = b"mcpbridge: login finished, you can close this tab.\n"
@@ -238,18 +266,22 @@ class Auth:
         cands = [f"{self.origin}/.well-known/oauth-protected-resource{path}",
                  f"{self.origin}/.well-known/oauth-protected-resource"]
         m = re.search(r'resource_metadata="([^"]+)"', challenge or "")
+        if m:
+            check_url(m.group(1), "resource_metadata")  # before first_json, which swallows errors
         prm = first_json(([m.group(1)] if m else []) + cands)
         if not prm.get("authorization_servers"):
             raise AuthFailed("protected resource metadata names no authorization server")
-        a = urllib.parse.urlsplit(prm["authorization_servers"][0])
+        a = urllib.parse.urlsplit(check_url(prm["authorization_servers"][0], "authorization server"))
         root = f"{a.scheme}://{a.netloc}/.well-known/oauth-authorization-server"
         asp = a.path.rstrip("/")
         meta = first_json([root + asp, root] if asp else [root])
         self.st.update(resource=prm.get("resource") or self.url,
                        scopes=prm.get("scopes_supported"),
-                       authorization_endpoint=meta["authorization_endpoint"],
-                       token_endpoint=meta["token_endpoint"],
-                       registration_endpoint=meta.get("registration_endpoint"))
+                       authorization_endpoint=check_url(meta["authorization_endpoint"],
+                                                        "authorization_endpoint"),
+                       token_endpoint=check_url(meta["token_endpoint"], "token_endpoint"),
+                       registration_endpoint=meta.get("registration_endpoint") and
+                       check_url(meta["registration_endpoint"], "registration_endpoint"))
 
     def refresh(self) -> None:
         if not (self.st.get("token_endpoint") and self.st.get("resource")):
@@ -276,7 +308,7 @@ class Auth:
             url = authorize_url(self.st, chal, state)
             log(f"login needed; opening browser (or open this URL): {url}")
             self.opener(url)
-            srv.query, srv.timeout = None, 1
+            srv.query, srv.state, srv.timeout = None, state, 1
             end = time.monotonic() + LOGIN_TIMEOUT
             while srv.query is None and time.monotonic() < end:
                 srv.handle_request()
@@ -525,8 +557,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="seconds to hold a call while upstream is unreachable (default 120)")
     ap.add_argument("--logout", action="store_true", help="delete stored tokens for the URL's origin")
     a = ap.parse_args(argv)
-    if urllib.parse.urlsplit(a.url).scheme not in ("http", "https"):
-        ap.error("url must be http(s)")
+    try:
+        check_url(a.url, "url")
+    except AuthFailed as e:
+        ap.error(str(e))
     auth = Auth(a.url)
     if a.logout:
         auth.path.unlink(missing_ok=True)

@@ -3,7 +3,7 @@ id          = "io.github.ventsislav-georgiev.prosper-agentkit"
 name        = "prosper-agentkit"
 title       = "Prosper Agent Kit"
 description = "Guard hooks, safe defaults and named workers for Claude Code."
-version     = "0.2.8"
+version     = "0.2.9"
 author      = "Ventsislav Georgiev"
 license     = "MIT"
 
@@ -112,6 +112,12 @@ run     = "hooks/worker-rules.sh"
 timeout = 10
 
 [[contributes.kit.pieces]]
+id       = "lean-code-rules"
+kind     = "claude-md"
+source   = "rules/lean-code.md"
+position = "bottom"
+
+[[contributes.kit.pieces]]
 id   = "ledger-tools"
 kind = "tools"
 dir  = "tools/ledger"
@@ -130,6 +136,11 @@ dir  = "tools/slack"
 id   = "mcpbridge-tools"
 kind = "tools"
 dir  = "tools/mcpbridge"
+
+[[contributes.kit.pieces]]
+id   = "spend-tools"
+kind = "tools"
+dir  = "tools/spend"
 
 [[contributes.kit.pieces]]
 id          = "hud"
