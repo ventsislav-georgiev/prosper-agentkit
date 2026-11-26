@@ -139,7 +139,9 @@ reprioritised, and every one is expected to stay planned and pending until it is
   `~/.claude/agents/worker-*.md`: about 6k tokens off every worker call). The rules a worker follows — ledger writes, deliverable file, handoff, shell and kill
   rules, worktrees, PR links — are in the agent file, and the worker reads the project's memory
   index itself as its first step. A rule added here that a worker must follow goes into those
-  agent files too; anything specific to the entry goes in the prompt.
+  agent files too; a rule shared by all workers can go in `worker-rules.md` in the kit's config
+  folder instead (the `worker-rules-hook` piece hands it to each subagent at start); anything
+  specific to the entry goes in the prompt.
 - An unblocked entry is the authorization — dispatch without asking. Before spawning, re-read the
   entry and skip any already IN PROGRESS in the `fork` lane; the worker claims the entry by writing
   its own `set-status --status 'IN PROGRESS' --fork` before starting. Never dispatch a BLOCKED entry.
@@ -233,6 +235,9 @@ Memory lives in the same database as the ledger and is written ONLY through `mem
 under `~/.claude/projects/<slug>/memory/` are generated mirrors: the harness loads `MEMORY.md` off
 disk and recalls the bodies from there, so they must keep existing, but they are output. Never hand-edit
 one — the next export overwrites it and the change is gone.
+Claude Code's built-in memory instructions tell a session to write memory files directly; in a kit
+session that is overridden: write through `memory.py` only (a file written directly has no row and is
+archived by the next export).
 
 - Write: `memory.py write <slug> <name> --description '<hook>' --type <user|feedback|project|reference>
   --body-file <file>` (or `--body`, or stdin). The row is written and that one file is regenerated in

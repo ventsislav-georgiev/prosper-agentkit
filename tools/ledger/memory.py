@@ -183,13 +183,16 @@ def cmd_delete(args):
 
 def cmd_export(args):
     """Rewrite the directory from the database. A file with no row is ARCHIVED, never deleted."""
+    if not args.directory and not args.slug:
+        raise SystemExit("error: export needs a directory or --slug")
     db = connect()
     d = Path(args.directory) if args.directory else memory_dir(args.slug)
     slug = args.slug or slug_of(d)
     rows = db.execute("SELECT name, raw FROM memories WHERE project_slug=? ORDER BY name", (slug,)).fetchall()
     if not rows:
         raise SystemExit(f"error: no memories for slug {slug!r}")
-    d.mkdir(parents=True, exist_ok=True)
+    if not args.check:  # --check writes nothing: a missing directory just means every row differs
+        d.mkdir(parents=True, exist_ok=True)
     kept, changed = set(), []
     for r in rows:
         f = d / f"{r['name']}.md"

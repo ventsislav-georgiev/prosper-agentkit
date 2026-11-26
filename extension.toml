@@ -3,7 +3,7 @@ id          = "io.github.ventsislav-georgiev.prosper-agentkit"
 name        = "prosper-agentkit"
 title       = "Prosper Agent Kit"
 description = "Guard hooks, safe defaults and named workers for Claude Code."
-version     = "0.2.6"
+version     = "0.2.7"
 author      = "Ventsislav Georgiev"
 license     = "MIT"
 
@@ -103,6 +103,13 @@ kind     = "claude-md"
 source   = "rules/compactguard.md"
 position = "bottom"
 needs    = ["compactguard-hook"]
+
+[[contributes.kit.pieces]]
+id      = "worker-rules-hook"
+kind    = "hook"
+event   = "SubagentStart"
+run     = "hooks/worker-rules.sh"
+timeout = 10
 
 [[contributes.kit.pieces]]
 id   = "ledger-tools"

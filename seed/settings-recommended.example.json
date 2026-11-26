@@ -12,7 +12,7 @@
     "CLAUDE_CODE_DISABLE_AGENT_VIEW": "1",
     "ENABLE_TOOL_SEARCH": "true",
     "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
-    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "370000"
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "300000"
   },
   "permissions": {
     "disableBypassPermissionsMode": "disable"

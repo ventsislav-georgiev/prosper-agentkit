@@ -42,6 +42,10 @@ piece: you can switch any piece off on the install sheet and keep the rest.
   finished work. Under the budget it prints nothing; it never blocks a compaction. `compactguard.py --test` checks it.
 - `compactguard-rules`: instruction text: follow those summary instructions and search the archive before reopening
   finished work. Needs `compactguard-hook`.
+- `worker-rules-hook`: a `SubagentStart` hook that hands `worker-rules.md` from the kit's config folder
+  (`~/.config/prosper-agentkit/worker-rules.md`) to every subagent at start, as added context. Workers run without the
+  CLAUDE.md files, so this is the one place for rules all of them share. With no file or an empty one it prints
+  nothing; it sends at most 16 KB, cut at a line end, and never blocks a subagent.
 - `ledger-tools`: the `todo.py` and `memory.py` commands in the kit's bin folder. `todo.py` keeps per-project work
   ledgers (entries, status lines, rounds, operator questions) in one SQLite database; every write takes
   `--expect-version` and refuses a stale one with exit 3, and needs a writer name (`--actor` or `LEDGER_ACTOR`).
@@ -142,6 +146,8 @@ poll every 5 minutes or less and exit when the subject reaches an end state.
 
 - Put your own instructions in `local.md` in the kit's config folder (`~/.config/prosper-agentkit/local.md`). It is
   read last and the kit never overwrites it.
+- Rules every worker should get go in `worker-rules.md` in the same folder; the `worker-rules-hook` piece hands them
+  to each subagent at start (workers do not read `local.md`).
 - To move a worker to a newer model, edit the `model:` line of its agent file in `~/.claude/agents/`. The file is then
   yours: Prosper keeps an edited file and reports it instead of replacing it.
 - removeguard: copy `removeguard.conf.example` to `removeguard.conf` in the kit's config folder
@@ -166,7 +172,7 @@ poll every 5 minutes or less and exit when the subject reaches an end state.
 - Switch off any piece you do not want on the install sheet; a piece that needs it goes off with it.
 - Run your own script before or after any hook or tool: put an executable file named `<name>.pre` or `<name>.post` in
   `~/.config/prosper-agentkit/hooks/`. `<name>` is the piece id for a hook or the status line (`killguard-hook`,
-  `removeguard-hook`, `prodguard-hook`, `compactguard-hook`, `prs-hook`, `hud`) and the command name for a tool (`safekill`,
+  `removeguard-hook`, `prodguard-hook`, `compactguard-hook`, `worker-rules-hook`, `prs-hook`, `hud`) and the command name for a tool (`safekill`,
   `saferm`, `gcloud`, `aws`, `kubectl`, `terraform`, `tofu`, `todo.py`, `memory.py`, `pr-watch.sh`, `gh-run-watch.sh`, `k8s-deploy-watch.sh`, `slack-say.py`). A `.pre`
   that exits non-zero stops the run (exit 2 blocks the tool call for a hook); a `.post` sees
   `KIT_STATUS` and cannot change the output. Prosper runs only a regular file you own that is not group- or
@@ -193,7 +199,7 @@ A kit cannot write `env` or other settings keys, so these stay a suggestion you 
     "CLAUDE_CODE_DISABLE_AGENT_VIEW": "1",
     "ENABLE_TOOL_SEARCH": "true",
     "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
-    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "370000"
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "300000"
   },
   "permissions": {
     "disableBypassPermissionsMode": "disable"
@@ -203,7 +209,7 @@ A kit cannot write `env` or other settings keys, so these stay a suggestion you 
 
 The first five turn off telemetry, error reports, feedback surveys and other non-essential calls. The next seven set
 the working style: auto mode, background tasks, the short system prompt, no git instructions, no agent view, tool
-search on and claude.ai MCP servers off. The last one sets the auto-compact window. `disableBypassPermissionsMode`
+search on and claude.ai MCP servers off. The last one sets the auto-compact window: 250000 compacted about twice as often, 300000 is the chosen balance. `disableBypassPermissionsMode`
 keeps the bypass-permissions mode from being turned on, so the guards and deny rules always apply.
 
 ## Remove

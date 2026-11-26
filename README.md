@@ -159,6 +159,7 @@ the supervisor:
 | `removeguard-tools`, `-hook`, `-rules` | `saferm`, a hook denying unsafe recursive deletes, and the matching rules |
 | `prodguard-tools`, `-hook`, `-rules` | guarded cloud CLIs, a hook denying the ways around them, and the matching rules |
 | `compactguard-hook`, `-rules` | a `PreCompact` hook that caps the summary, and the matching rules |
+| `worker-rules-hook` | a `SubagentStart` hook that hands your `worker-rules.md` to every subagent |
 | `ledger-tools` | `todo.py` and `memory.py` over one SQLite database |
 | `monitors-tools` | `pr-watch.sh`, `gh-run-watch.sh` and `k8s-deploy-watch.sh` |
 | `slack-tools` | `slack-say.py` |
@@ -181,6 +182,8 @@ Each piece is described in full in [REFERENCE.md](REFERENCE.md#what-it-changes).
 ## Customise
 
 - Your own instructions go in `~/.config/prosper-agentkit/local.md`. It is read last and the kit never overwrites it.
+- Rules every worker should get go in `~/.config/prosper-agentkit/worker-rules.md`; the `worker-rules-hook` piece hands
+  them to each subagent at start.
 - Production targets go in `prodguard.conf`, and delete scopes in `removeguard.conf`, both in the same folder. The
   examples are copied there for you.
 - Run your own script before or after any hook or tool with a `<name>.pre` or `<name>.post` file in
