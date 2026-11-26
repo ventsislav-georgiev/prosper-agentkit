@@ -9,8 +9,8 @@ piece: you can switch any piece off on the install sheet and keep the rest.
 
 - `rules`: adds one import line to your `~/.claude/CLAUDE.md` that loads this kit's `CLAUDE.md`: the whole working
   rule set (modern CLI tools, monitors, the ledger and memory through `todo.py` and `memory.py`, the supervisor and
-  worker protocol, PR links, Slack messages through `slack-say.py`, killguard), with every tool path pointing at the
-  kit's bin folder. It ends by importing your own `local.md` from the kit's config folder. It stays on while any other instruction piece is on.
+  worker protocol, PR links, Slack messages through `slack-say.py`), naming the kit's bin folder once as `KIT_BIN=<path>`
+  and every tool as `$KIT_BIN/<tool>` after it. It ends by importing your own `local.md` from the kit's config folder. It stays on while any other instruction piece is on. It does not repeat the killguard-rules, prodguard-rules, prosper-rules or workers-rules pieces: turning one of those off drops its rules from every session.
 - `killguard-tools`: the `safekill` command in the kit's bin folder. `safekill [-n] [-s SIG] <pattern>` lists your
   processes whose command line matches, then signals them by pid. It signals nothing when the pattern is under 6
   characters or only digits, or when any match is a Claude Code or dch session; `-n` only lists.
@@ -118,7 +118,7 @@ piece: you can switch any piece off on the install sheet and keep the rest.
 - `prosper-rules`: instruction text for Prosper's control CLI, `ProsperApp ctl` (the binary inside Prosper.app): run
   `describe` first, then the commands (start, read, talk to or resume agent sessions, X-ray search, layouts, settings).
   Changing commands need Prosper's Settings switch "Let agents control Prosper" on; reads never do. The kit has no
-  skill piece kind, so this is a rules piece; `CLAUDE.md` and every worker agent file carry a short pointer to it.
+  skill piece kind, so this is a rules piece; every worker agent file carries a short pointer to it.
 - `deny-system`: 27 deny rules for disk tools, privilege tools and recursive deletes of top-level folders.
 - `deny-secrets`: 42 deny rules: 41 keep Claude from reading or editing secret files (keys, cloud and tool
   credentials, `.env` files) and one denies the `Artifact` tool.

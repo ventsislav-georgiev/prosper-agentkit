@@ -2,6 +2,9 @@
 
 Rules from the prosper-agentkit kit follow; your own lines are in local.md, read last.
 
+The kit's bin folder is `KIT_BIN={{kit_bin}}`. Your shell does not set `KIT_BIN`: where these rules write
+`$KIT_BIN/<tool>`, run the tool by that folder's full path.
+
 # Modern CLI Tools — Prefer These
 
 Use over POSIX equivalents (gitignore-aware, faster, better defaults). POSIX only when portability required (CI, portable scripts).
@@ -17,17 +20,17 @@ Use over POSIX equivalents (gitignore-aware, faster, better defaults). POSIX onl
 - macOS: `gsed` for GNU `sed -i` semantics
 - Extras: `tokei` LOC, `dust` du, `duf` df, `procs` ps, `gron` grep-able JSON, `mlr` CSV, `dasel` any-format query, `xh` curl, `choose` cut/awk, `htmlq` HTML extract, `glow` render MD, `ouch` archives, `zellij` tmux
 
-# Long-Running Monitors — Use the Kit's Monitors in `{{kit_bin}}`
+# Long-Running Monitors — Use the Kit's Monitors in `$KIT_BIN`
 
 Watching a PR, a rollout, or any slow external thing: launch one of these as a background shell
 instead of a fresh poll loop or repeated status checks. They print only state transitions —
 silence means nothing changed — and exit 0 on a terminal state. The Monitors section of the kit's
 REFERENCE.md lists every script.
 
-- `{{kit_bin}}/pr-watch.sh <pr> [owner/repo] [local-repo-dir]`: a PR until MERGED/CLOSED; it reruns
+- `$KIT_BIN/pr-watch.sh <pr> [owner/repo] [local-repo-dir]`: a PR until MERGED/CLOSED; it reruns
   infrastructure failures itself.
-- `{{kit_bin}}/gh-run-watch.sh <run-id> [owner/repo]`: one GitHub Actions run to its end.
-- `{{kit_bin}}/k8s-deploy-watch.sh <context> <namespace> <deployment>`: a Deployment's ready/desired count.
+- `$KIT_BIN/gh-run-watch.sh <run-id> [owner/repo]`: one GitHub Actions run to its end.
+- `$KIT_BIN/k8s-deploy-watch.sh <context> <namespace> <deployment>`: a Deployment's ready/desired count.
 
 Rules for monitoring anything, with or without these scripts:
 
@@ -36,74 +39,69 @@ Rules for monitoring anything, with or without these scripts:
 - An unreachable backend is not a transition: go quiet, announce the recovery.
 - Extend these scripts rather than writing one-off loops; a new kind of subject earns a new script next to them, documented in the kit's REFERENCE.md.
 
-# Controlling Prosper
-
-To start, read, talk to or resume Prosper's agent sessions, search their X-ray, switch layouts or change a Prosper
-setting, use `ProsperApp ctl` (the binary inside Prosper.app). Run `ProsperApp ctl describe` first: it lists every
-command. The `prosper-rules` piece has the rules and examples.
-
 # Todos — Session List + the Ledger Database
 
 Two surfaces, one set of ids: the session task list is the working queue; the ledger is the record
 that survives the session. The ledger is ONE SQLite database for every project, written only
-through `{{kit_bin}}/todo.py`; no file is a ledger. Write as work happens, not at the
-end — a crashed session must lose nothing. The kit's `hud` status line
-renders the rows live from that database, so a wrong write shows as a
-wrong row rather than a silent one.
+through `$KIT_BIN/todo.py`; no file is a ledger. Write as work happens, not at the end — a crashed
+session must lose nothing. The kit's `hud` status line renders the rows live, so a wrong write shows
+as a wrong row rather than a silent one.
 
 ## Which ledger
 
 - One project per queue: `todo.py <command> <project> …` over one database (`ledger.sqlite3` in the
-  kit's state folder; `LEDGER_DB` names another).
+  kit's state folder; `LEDGER_DB` names another). `todo.py projects` lists every project with its
+  paths and entry count.
 - Decided once, at session start: **session name first** (a project of that name exists → use it),
   else **start directory** (`CLAUDE_PROJECT_DIR`, equivalently stdin `workspace.project_dir`)
   matched against project names and their `paths` column (one path per line, for start dirs
   carrying nothing of the project name). Not the current working directory — a mid-session `cd`
   changes nothing. Unnamed sessions get auto-titled and those titles drift, so they never mint a
-  project. `todo.py projects` lists every project with its paths and entry count.
-- Reusing a session name means "continue that ledger" — treat it as deliberate. If the reuse is
-  genuinely a different project, say so and start a project under a new name. Never merge unrelated
-  queues; never drop an old one.
+  project.
+- A reused session name means "continue that ledger", deliberately. If it is genuinely a different
+  project, say so and start a project under a new name. Never merge unrelated queues; never drop an
+  old one.
 - An issue board shared with QA, if you keep one, is a SEPARATE database with its own script and its
   own vocabulary. Rows there, entries here.
 
 ## Entry format (the columns the HUD renders)
 
-- Ids are stable — never renumber; a wrong id is closed with the reason, not deleted. One row per
-  id is enforced by the primary key, so an update can only go INSIDE its entry. Never reuse an id
-  for different work: two items under one id hide whichever closed.
+- Ids are stable — never renumber, and never reuse an id for different work (two items under one id
+  hide whichever closed); a wrong id is closed with the reason, not deleted. The primary key allows
+  one row per id, so an update can only go INSIDE its entry.
 - `status` leads and is one of `OPEN` / `IN PROGRESS` / `DONE` / `DROPPED` / `PARKED`, written with
-  `todo.py set-status <project> <id> --status <S> --note '<why>' --expect-version <v>`. That
-  appends a dated status line to the entry's prose AND re-derives the column from it, so the
-  history stays and the row can never disagree with the record.
-- Write `IN PROGRESS` when picking an item up, not when finishing, and update the session task list
-  under the same id in the same breath.
+  `todo.py set-status <project> <id> --status <S> --note '<why>' --expect-version <v>`. It appends a
+  dated status line to the entry's prose AND re-derives the column from it: the history stays and
+  the row never disagrees with the record.
+- `IN PROGRESS` means a worker or a review is live now: write it when picking an item up, not when
+  finishing, and update the session task list under the same id in the same breath.
 - Progress is appended, never overwritten: `todo.py append <project> <id> '<what happened>' --kind
-  round --expect-version <v>` per meaningful step — it numbers and dates the round itself. Closing
-  records why it closed and what came out — "Done" alone is not a close.
-- **The merge is the close.** When the PR merges — `pr-watch.sh` exiting MERGED, or you seeing it
-  merge — run `set-status --status DONE --note '<what came out of it>, <url>'` in that same action,
-  before moving on. Nothing else in this protocol ever makes closing the next action, so an entry
-  whose work has landed otherwise keeps reading IN PROGRESS. Work with no PR closes on its own
-  terminal event (the deploy ran, the operator answered, the doc shipped).
+  round --expect-version <v>` per meaningful step (it numbers and dates the round). A close records
+  why it closed and what came out — "Done" alone is not a close.
+- **The merge is the close.** When the PR merges (`pr-watch.sh` exits MERGED, or you see it merge),
+  run `set-status --status DONE --note '<what came out of it>, <url>'` in that same action, before
+  moving on: nothing else makes closing the next action, so a landed entry would keep reading IN
+  PROGRESS. Work with no PR closes on its own terminal event (the deploy ran, the operator answered,
+  the doc shipped).
 - `todo.py set-parallel <project> <id> 'FORKABLE — <why nothing overlaps>'` or
   `'BLOCKED behind #414 and #399 — <what they share>'`. Ids before the em dash are the blockers and
   become the `blocked_by` column. FORKABLE is a claim against every other entry that could be live
   at the same moment: disjoint files, disjoint subsystems, no ordering. An entry sharing files with
   a sibling is NOT FORKABLE — name the sibling instead.
-- Workers pass `--fork` on every write, which sets the entry's lane; the claim also carries
-  `--worker <model>/<effort>`, the only place a worker's tier is recorded. Untagged means the main
-  lane.
+- A worker's claim, `set-status --status 'IN PROGRESS' --fork --worker <model>/<effort>`, puts the
+  entry in the `fork` lane and is the only place a worker's tier is recorded; only `set-status` takes
+  `--fork`. Untagged means the main lane.
 - One database, many writers: every mutating command takes `--expect-version <v>` and exits 3 with
   `{"error":"version_conflict","current":…}` when someone else wrote first — re-read with `todo.py
-  get` and reapply. The writer in the append-only `events` table is the session's name (`DCH_SESSION`), so export
-  nothing; `LEDGER_ACTOR=<name>` or `--actor <name>` overrides it, for a worker or outside dch.
+  get` and reapply. The writer in the append-only `events` table is the session's name
+  (`DCH_SESSION`, nothing to export); `LEDGER_ACTOR=<name>` or `--actor <name>` overrides it, for a
+  worker or outside dch.
 - Order is the work order (`ord`): `todo.py list <project>` is the live queue (add `--all` for the
   closed ones), top is next. Reorder with `todo.py move <project> <id> (--before <id> | --after <id>
-  | --top | --bottom) --note '<why>' --expect-version <v>`: it changes only that entry's place, and
-  appends the reason to the entry as a `**Move, <date>**` line that no status rule reads.
-- `todo.py export-md <project>` renders a ledger as markdown, for reading a whole ledger at
-  once or diffing. It is a report, never an input — nothing reads a ledger from a file.
+  | --top | --bottom) --note '<why>' --expect-version <v>`: it changes only that entry's place and
+  appends the reason as a `**Move, <date>**` line that no status rule reads.
+- `todo.py export-md <project>` renders a ledger as markdown for reading whole or diffing. It is a
+  report, never an input — nothing reads a ledger from a file.
 - Questions for the operator are rows in the same database: `todo.py ask <project> OQ-<n> --title
   '<question>' --body '<what it blocks>'`, answered with `todo.py rule <project> OQ-<n> '<ruling>'`.
   `todo.py questions <project> --status OPEN` is the outstanding list.
@@ -111,7 +109,7 @@ wrong row rather than a silent one.
 ## The list is the plan
 
 Nothing is removed from the list without discussing it with the user: entries are only added and
-reprioritised, and every one is expected to stay planned and pending until it is done.
+reprioritised, and every one stays planned and pending until it is done.
 
 - Sweep with `todo.py plan <project>` at session start, on every heartbeat tick and before any
   status answer. It prints every entry that is not closed, in work order, flags what has gone quiet
@@ -123,28 +121,30 @@ reprioritised, and every one is expected to stay planned and pending until it is
   the agent's call, with the un-park condition in the note; the sweep reopens it when that passes.
 - A phase that ships on its own is its own entry: `todo.py create … --after <parent>` puts it right
   after its parent. A phase named only inside a spec or another entry's text is not planned.
-- `IN PROGRESS` means a worker or a review is live now. Work order is the operator's priority:
-  taking a later entry ahead of an earlier unblocked one is said to the operator, with the reason.
-  A priority change is made with `todo.py move`, with the operator's words in `--note`, never only
-  as a note.
+- Work order is the operator's priority: taking a later entry ahead of an earlier unblocked one is
+  said to the operator, with the reason. A priority change is made with `todo.py move`, with the
+  operator's words in `--note`, never only as a note.
 
 ## Supervisor / worker protocol
 
 - The main session supervises only — dispatch, review, unblocking, ledger upkeep, talking to the
-  user. Workers implement, spawned via the Agent tool with the ledger id, the project name, the
-  kit's bin folder as `KIT_BIN={{kit_bin}}` (an agent file is installed byte for byte, so it says
-  `$KIT_BIN`), and the full entry text from `todo.py get <project> <id>` in the prompt (a worker inherits no
-  conversation context — restate every binding constraint).
+  user. Workers implement, spawned via the Agent tool with the ledger id, the project name,
+  `KIT_BIN=` and the bin folder's full path (agent files say `$KIT_BIN`), and the full entry text
+  from `todo.py get <project> <id>` in the prompt (a worker inherits no conversation context —
+  restate every binding constraint).
+- Message another session only with work, a verdict or a question it must answer; never an
+  acknowledgement, thanks or agreement alone. Batch updates for the same session into one message.
 - Workers run without this file and without any project `CLAUDE.md` (`omitClaudeMd: true` in every
-  `~/.claude/agents/worker-*.md`: about 6k tokens off every worker call). The rules a worker follows — ledger writes, deliverable file, handoff, shell and kill
-  rules, worktrees, PR links — are in the agent file, and the worker reads the project's memory
-  index itself as its first step. A rule added here that a worker must follow goes into those
-  agent files too; a rule shared by all workers can go in `worker-rules.md` in the kit's config
-  folder instead (the `worker-rules-hook` piece hands it to each subagent at start); anything
-  specific to the entry goes in the prompt.
+  `~/.claude/agents/worker-*.md`: about 6k tokens off every worker call). Their rules — ledger
+  writes, deliverable file, handoff, shell, kill and background-job rules, worktrees, PR links — are
+  in the agent file, so the prompt does not restate them, and the worker reads the project's memory
+  index itself as its first step. A rule added here that a worker must follow goes into those agent
+  files too; a rule shared by all workers can go in `worker-rules.md` in the kit's config folder
+  instead (the `worker-rules-hook` piece hands it to each subagent at start); anything specific to
+  the entry goes in the prompt.
 - An unblocked entry is the authorization — dispatch without asking. Before spawning, re-read the
-  entry and skip any already IN PROGRESS in the `fork` lane; the worker claims the entry by writing
-  its own `set-status --status 'IN PROGRESS' --fork` before starting. Never dispatch a BLOCKED entry.
+  entry and skip any already IN PROGRESS in the `fork` lane; the worker claims the entry itself
+  before starting. Never dispatch a BLOCKED entry.
 - Concurrency: max 6 live workers. Unclaimed FORKABLE entries fan out to that cap; everything else
   serializes in ledger order — still by workers, never the main lane. At dispatch, re-check
   FORKABLE pairwise and against live workers (annotations go stale): entries about to touch the
@@ -156,67 +156,50 @@ reprioritised, and every one is expected to stay planned and pending until it is
   critic’s pass: read the diff end to end, run the tests, check every report claim against
   evidence on disk (the report is a lead, never proof), and check against the entry’s
   done-condition plus what it should have delivered even unstated (tests, guards, scope quietly
-  narrowed). Pass → close stands; when the deliverable is a PR, arm `pr-watch.sh` through the
-  Monitor tool in the same action (a worker’s backgrounded processes die when it reports;
-  TaskStop the watcher on merge/close). Fail → entry stays IN PROGRESS; re-dispatch the same entry
-  with the critique, the missing evidence, and the narrowed search embedded in the prompt — to a
-  fresh worker that reads the previous worker's deliverable file. SendMessage to the same worker
-  only within 5 minutes of its report: its prompt cache lasts 5 minutes, and waking it later re-writes its
-  whole context, seven times the cost of a fresh start.
+  narrowed). Judge a dead worker by its output file, not its stall message. Pass → close stands;
+  when the deliverable is a PR, arm `pr-watch.sh` through the Monitor tool in the same action (a
+  worker’s backgrounded processes die when it reports; TaskStop the watcher on merge/close). Fail →
+  entry stays IN PROGRESS; re-dispatch the same entry with the critique, the missing evidence, and
+  the narrowed search embedded in the prompt — to a fresh worker that reads the previous worker's
+  deliverable file. SendMessage to the same worker only within 5 minutes of its report: its prompt
+  cache lasts 5 minutes, and waking it later re-writes its whole context, seven times the cost of a
+  fresh start.
 - **A worker stays short and hands off.** Every call re-reads the worker's whole context, so its
   cost grows with the square of its length (workers past 200k tokens of context were 60% of worker
   spend). Size an entry so one worker finishes it in about 60 tool calls, and split it before
-  dispatch when it will not. Past that the worker hands off by itself, as its agent file says: it
-  writes what is done, what remains and what it learned to its deliverable file and reports
-  `HANDOFF` with that path. The supervisor dispatches a fresh worker for the remainder under the
-  same entry; the review gate applies to the last worker's report, which covers the whole entry.
-- **A worker returns a pointer, not a payload.** The full deliverable goes to a file; the report
-  back is the verdict, that path, and only the evidence the review needs to start. The
-  supervisor reads the file when the review actually needs it. Every report is read whole into the
-  supervisor's context, so at the worker cap long reports — not queue length — are what drive
-  constant compaction, and a compacting supervisor is not reviewing.
-- Every worker and subagent is a named agent `worker-<model>-<effort>` from `~/.claude/agents/` —
-  never `general-purpose`, never a bare `model` parameter. Each is a copy of the built-in general-purpose agent with `model:`,
-  `effort:` and `tools:` pinned in frontmatter — the only way a subagent gets an effort other than
-  the session's, since the Agent tool call has no `effort` parameter. The supervising brain stays
-  on the session model (read it off the HUD, `model:<name>(<effort>)`). The worker’s
-  `description` leads with its tier in brackets — `[opus/high] Extract the billing module` — because
-  the agent panel shows neither. Confirm the pin took with `/tasks`: the row shows model and effort.
-- Model choice — a trial, judged on cost per closed entry and on how often a
-  review fails. Workers are half of all spend, and Sonnet 5.5 costs half of Opus 5.5 per token.
-  - `worker-haiku` (Haiku 5.5, read-only): locating and reading — find files, read logs and test
-    output, summarize what is there. A wrong answer must be cheap to spot; it never edits and never
-    makes the judgment call. Keep the task small: past 100k tokens of prompt Haiku costs five times
-    more per token.
-  - `worker-sonnet-low` / `worker-sonnet-medium` (Sonnet 5.5): the entries that are `low` or
-    `medium` below — fully specified work with a test, a build or a script that checks the result.
-  - `worker-opus-<effort>` (Opus 5.5): every entry that is too hard for Sonnet — multi-file
-    changes, a migration, a performance fix, debugging with an unknown cause. Its first dispatch is
-    `worker-opus-medium`; see the effort choice below.
+  dispatch when it will not. Past that the worker reports `HANDOFF` with its deliverable file (its
+  agent file says how); dispatch a fresh worker for the remainder under the same entry. The review
+  gate applies to the last worker's report, which covers the whole entry.
+- **A worker returns a pointer, not a payload**: the verdict, its deliverable file's path and only
+  the evidence the review needs to start; read the file when the review actually needs it. Every
+  report is read whole into the supervisor's context, so at the worker cap long reports — not queue
+  length — drive constant compaction, and a compacting supervisor is not reviewing.
+- Every worker and subagent is a named agent `worker-<model>-<effort>` from `~/.claude/agents/`
+  (the `workers-rules` piece lists them and why) — never `general-purpose`, never a bare `model`
+  parameter. The supervising brain stays on the session model (read it off the HUD,
+  `model:<name>(<effort>)`). The worker’s `description` leads with its tier in brackets —
+  `[opus/high] Extract the billing module` — because the agent panel shows neither. Confirm the pin
+  took with `/tasks`: the row shows model and effort.
+- Model choice — a trial, judged on cost per closed entry and on how often a review fails. Workers
+  are half of all spend, and Sonnet 5.5 costs half of Opus 5.5 per token. The tiers are in the
+  `workers-rules` piece; on top of it:
+  - `worker-haiku`: a wrong answer must be cheap to spot; it never makes the judgment call. Keep the
+    task small: past 100k tokens of prompt Haiku costs five times more per token.
   - A Sonnet worker whose review fails is re-dispatched to `worker-opus-medium`, not to Sonnet at a
-    higher effort: effort does not add skill the model lacks. Record the failed tier in the round.
-- Effort choice — how much tracing the entry needs:
-  - `low`: single-file, fully specified, the diff is checkable at a glance.
-  - `medium`: the default first dispatch for every entry, multi-file changes and debugging
-    included (`medium` costs about 70% of `high`).
-  - `high`: the redo only — after a `medium` worker's review failed, with the critique and a
-    sharper prompt. Never a first pick. Record the failed tier in the round.
-  - `xhigh` / `max`: only for an extreme, critical entry — rare, slow and token-heavy, never a
-    first pick.
-  Splitting the task beats raising effort when the entry is doing two things.
-- The shell, deliverable-file, handoff and background-job rules are in the worker's agent file: do
-  not restate them in the prompt. A worker reports only once every job it started has finished or
-  been stopped: a job finishing after the report wakes the worker and re-writes its whole context. Judge a dead worker by its output file, not its stall message.
-- Every session calls the cloud CLIs (`gcloud`, `aws`, `kubectl`, `terraform`, `tofu`) by name, never by the
-  real binary's path (`/opt/homebrew/...`). `{{kit_bin}}/<tool>` exists only while the prodguard-tools piece is on.
-  prodguard's hook denies the real path; the shim passes reads through and refuses production writes.
+    higher effort: effort does not add skill the model lacks.
+  - Effort is how much tracing the entry needs. `medium` is the first dispatch for every entry,
+    multi-file changes and debugging included (it costs about 70% of `high`); `low` only when the
+    entry is single-file, fully specified and its diff is checkable at a glance; `high` is the redo
+    after a `medium` worker's review failed, with the critique and a sharper prompt, never a first
+    pick; `xhigh` / `max` only for an extreme, critical entry — rare, slow and token-heavy, never a
+    first pick. Record a failed tier in the round.
+  - Splitting the task beats raising effort when the entry is doing two things.
 - Every dispatch appends a note to the entry:
   `todo.py append <project> <id> 'worker spawned via Agent, subagent_type: worker-<model>-<effort>
   (model: <model>, effort: <effort>).' --kind dispatch --expect-version <v>`
 - **Stop what is done, remove what is unused.**
   - A worker whose review round has landed, or whose entry has closed, is stopped with TaskStop in the
-    same action. A worker that has reported is kept only for a SendMessage follow-up inside the
-    5-minute window above; past it, stop it — its context is no longer cheaper than a fresh worker's.
+    same action. A reported worker is kept only inside the 5-minute SendMessage window above.
   - A finished worker's worktrees go too: every scratch worktree when it reports, and the PR's own
     worktree when the entry closes. Remove each with `git worktree remove`, never with prune.
   - Never move the session into a worktree: a top-level `cd` there carries into later calls. Work in
@@ -229,9 +212,9 @@ reprioritised, and every one is expected to stay planned and pending until it is
   - This applies to every session, supervisor or QA alike: a session stops its own idle subagents and
     removes its own worktrees. It never touches another session's.
 
-# Memory — SQLite via `{{kit_bin}}/memory.py`
+# Memory — SQLite via `memory.py`
 
-Memory lives in the same database as the ledger and is written ONLY through `memory.py`. The files
+Memory lives in the same database as the ledger and is written ONLY through `$KIT_BIN/memory.py`. The files
 under `~/.claude/projects/<slug>/memory/` are generated mirrors: the harness loads `MEMORY.md` off
 disk and recalls the bodies from there, so they must keep existing, but they are output. Never hand-edit
 one — the next export overwrites it and the change is gone.
@@ -272,10 +255,10 @@ user-facing text carries its full URL, so it is one click away:
 - Same rule for GitLab MRs, Jira issues, and Notion pages — link the identifier, always.
 - Repeated mentions of the same PR in one reply need the link once, on the first mention.
 
-# Posting in Slack — Use `{{kit_bin}}/slack-say.py`
+# Posting in Slack — Use `slack-say.py`
 
 Every Slack message an agent sends (DM, thread reply, channel post) is built with
-`{{kit_bin}}/slack-say.py [--title TEXT] LINE...` and sent with its output verbatim, including
+`$KIT_BIN/slack-say.py [--title TEXT] LINE...` and sent with its output verbatim, including
 the `> ⠀` spacer lines (a braille blank; Slack drops a truly empty quoted line).
 
 - In a DM, never reply in a thread: post a new top-level message (no `thread_ts`), even when answering
@@ -289,21 +272,5 @@ the `> ⠀` spacer lines (a braille blank; Slack drops a truly empty quoted line
 - No `*x*` emphasis (it renders italic). The tool puts money and numbers with a unit in backticks;
   dates and plain counts stay plain. Write PRs as `repo#N` (or `owner/repo#N`) and Jira
   keys as `KEY-N` (the projects in the kit's `jira_projects` setting): the tool turns them into links and refuses a bare `#N`.
-
-# killguard
-
-No agent kills processes by pattern. A pattern kill matches every process whose command line holds the text, other
-sessions included. On macOS, pkill also stops reading options at the first pattern, so an option such as `-U <uid>`
-after it becomes one more pattern: a bare uid matches every process whose argv holds a path with that number in it,
-and can take down every Claude session on the machine.
-
-- `{{kit_bin}}/safekill [-n] [-s SIG] <pattern>` lists this user's processes whose command line matches, then signals them by pid.
-  - Nothing is signalled if the pattern is under 6 characters or only digits, or if any match is a Claude or dch session
-    (`/tmp/dch-N/`, `/tmp/cc-socks/`, a `claude` or `dch` executable).
-  - `-n` lists the matches only.
-  - pgrep already leaves out the caller and its ancestors.
-- Prefer to kill the pid you recorded when you started the process (`$!`), with `kill <pid>`.
-- A PreToolUse hook (the kit's `killguard-hook` piece) denies `pkill` and `killall` in any
-  command position.
 
 @{{kit_config}}/local.md
