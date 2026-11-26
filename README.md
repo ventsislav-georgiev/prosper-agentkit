@@ -115,8 +115,9 @@ The session checks that its watchers are still alive about every 5 minutes.
 Permission rules add about a hundred allow and deny entries on top: no reading secret files, no disk or privilege tools,
 asking before deleting a GitHub repo or release.
 
-The guards fail closed: when one cannot run, the tool call is blocked. They are a seatbelt, not a boundary. They read
-the command text, so a delete hidden in `eval`, a script file or another language gets through. Your cloud
+When Prosper cannot run killguard, removeguard or prodguard at all, the tool call is blocked. A guard that runs but
+cannot parse a call lets it through, so a broken parse never blocks every command. They are a seatbelt, not a
+boundary: they read the command text, so a delete hidden in `eval`, a script file or another language gets through. Your cloud
 permissions remain the real boundary.
 
 ### Talking to people
@@ -137,8 +138,9 @@ permissions remain the real boundary.
 
 ### A QA session
 
-The kit does not install one, but its rules expect it: a second, independent session that checks the supervisor's work
-before it ships. It works alongside the supervisor:
+The kit neither installs nor requires one; its rules mention a QA session only in passing. It is a practice that pairs
+well with the protocol: a second, independent session that checks the supervisor's work before it ships, alongside
+the supervisor:
 
 - **Before every push** the supervisor sends QA the commit, the changed files and the evidence (tests, CI), and waits
   for a verdict. Risky changes (parsers, regexes, CI workflows, anything security-relevant) get a deeper read.
