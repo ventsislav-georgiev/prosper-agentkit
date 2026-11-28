@@ -24,6 +24,9 @@ import { load, prMeta, refreshIfStale } from './prs.mjs';
  * every session's statusline runs through here.
  */
 const META_MAX = 16_000; // dch rejects > 16384 bytes
+const META_TOKENS = 1024; // and > 1024 JSON tokens: every object, array, key and value is one
+const tokens = (v) => 1 + (Array.isArray(v) ? v.reduce((n, x) => n + tokens(x), 0)
+  : v && typeof v === 'object' ? Object.values(v).reduce((n, x) => n + 1 + tokens(x), 0) : 0);
 const META_REPUSH_MS = 30_000;
 function pushMeta(sid, state) {
   let tmp;
@@ -32,7 +35,7 @@ function pushMeta(sid, state) {
     if (!dch || typeof sid !== 'string' || !/^[0-9A-Za-z-]{1,64}$/.test(sid)) return;
     const body = { prs: prMeta(state) };
     let json = JSON.stringify(body);
-    while (Buffer.byteLength(json) > META_MAX && body.prs.open.length) {
+    while ((Buffer.byteLength(json) > META_MAX || tokens(JSON.parse(json)) > META_TOKENS) && body.prs.open.length) {
       body.prs.open.pop();
       json = JSON.stringify(body);
     }

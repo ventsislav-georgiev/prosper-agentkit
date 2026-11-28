@@ -120,8 +120,8 @@ piece: you can switch any piece off on the install sheet and keep the rest.
 - `dch-bridge`: the kit's Claude Code to dch integration point, run with `node`. It is Claude Code's status line
   because that is the hook Claude Code calls on every update with the live session; it prints nothing, so no status
   row is drawn. Each run pushes the session's pull requests to dch (`dch --meta <DCH_SESSION> '{"prs":{"open":[…],"merged":N}}'`,
-  at most 50 open ones), at once when they change and again every 30 s, so a push dch missed or cleared is repaired.
-  When the pull request state is older than a minute, it asks `gh` for each one's state in the background. It never
+  at most 50 open ones, each `{url,repo,num,title}` plus, when known, `ci` (`pass`/`fail`/`pending`), `review` (`approved`/`changes_requested`/`required`), `threads` (unresolved review threads), `draft`, `mergeable` (`conflict`) and `autoMerge`), at once when they change and again every 30 s, so a push dch missed or cleared is repaired.
+  When the pull request state is older than a minute, it asks `gh` (one GraphQL call each) for each one's state and those fields in the background. It never
   waits on dch or `gh`. Without `DCH_SESSION` it pushes nothing. Its files (pull request state, the last push) live in
   `hud/` in the kit's state folder. It replaces your status line while it is on; Remove puts yours back.
 - `prs-hook`: a `PostToolUse` hook for `Bash` that feeds `dch-bridge`. When a `gh pr create` command

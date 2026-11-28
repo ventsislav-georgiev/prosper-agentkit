@@ -26,12 +26,25 @@ rows = [(k, a["n"], a["f"], sum(a["hi"][r] - a["lo"][r] for r in a["hi"]) * 100)
 fitr = [r for r in rows if r[0] not in SMALL and r[3] >= 15]
 if len(fitr) < 2:
     sys.exit(f"spend-report accounts: need at least 2 accounts with 15+ points (have {len(fitr)})")
-w = lstsq([[r[1], r[2]] for r in fitr], [r[3] for r in fitr])
-if not w or w[0] <= 0 or w[1] <= 0:
-    sys.exit("spend-report accounts: the fit has no positive Fable and non-Fable weights; the accounts need a mix of both")
 h = (max(a["t1"] for a in acc.values() if a["t1"]) - min(a["t0"] for a in acc.values() if a["t0"])) / 3600
 if h <= 0:
     sys.exit("spend-report accounts: the usage rows span no time")
+if not any(r[2] for r in fitr):   # no Fable spend in the fit: the Fable column is all zero, so fit non-Fable alone
+    w0 = lstsq([[r[1]] for r in fitr], [r[3] for r in fitr])
+    if not w0 or w0[0] <= 0:
+        sys.exit("spend-report accounts: the fit has no positive non-Fable weight")
+    N, F = sum(r[1] for r in rows), sum(r[2] for r in rows)
+    print(f"log spans {h / 24:.1f} days; fit over {len(fitr)} accounts: they have no Fable spend, so the fit is non-Fable only")
+    for k, n, f, p in fitr:
+        print(f"  {k:18s} actual {p:4.0f}  fitted {w0[0] * n:4.0f}")
+    print(f"one account-week = ${100 / w0[0]:,.0f} non-Fable (list price)")
+    print(f"rate: non-Fable ${N / h:.0f}/h -> {w0[0] * N / h * 1.68:.1f} account-weeks per week")
+    if F:   # QA r2121 n1: a small or thin account can still spend on Fable; there is no Fable weight to count it with
+        print(f"Fable ${F / h:.0f}/h in accounts outside the fit is not counted")
+    sys.exit(0)
+w = lstsq([[r[1], r[2]] for r in fitr], [r[3] for r in fitr])
+if not w or w[0] <= 0 or w[1] <= 0:
+    sys.exit("spend-report accounts: the fit has no positive Fable and non-Fable weights; the accounts need a mix of both")
 N, F = sum(r[1] for r in rows), sum(r[2] for r in rows)
 print(f"log spans {h / 24:.1f} days; fit over {len(fitr)} accounts: a Fable dollar counts {w[1] / w[0]:.1f}x a non-Fable dollar")
 for k, n, f, p in fitr:

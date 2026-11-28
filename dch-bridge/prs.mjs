@@ -80,6 +80,41 @@ export function refreshIfStale(sid, state) {
   } catch { /* best effort */ }
 }
 
+// Per-PR status keys, each present only when known. Anything outside these keys and values is dropped, so a
+// hand-edited state file cannot widen the push.
+const CI = { SUCCESS: 'pass', FAILURE: 'fail', ERROR: 'fail', PENDING: 'pending', EXPECTED: 'pending' };
+const REVIEW = { APPROVED: 'approved', CHANGES_REQUESTED: 'changes_requested', REVIEW_REQUIRED: 'required' };
+const CI_VALUES = new Set(Object.values(CI)), REVIEW_VALUES = new Set(Object.values(REVIEW));
+function statusOf(pr) {
+  const o = {};
+  if (CI_VALUES.has(pr?.ci)) o.ci = pr.ci;
+  if (REVIEW_VALUES.has(pr?.review)) o.review = pr.review;
+  if (Number.isInteger(pr?.threads) && pr.threads >= 0) o.threads = pr.threads;
+  if (pr?.draft === true) o.draft = true;
+  if (pr?.mergeable === 'conflict') o.mergeable = 'conflict';
+  if (pr?.autoMerge === true) o.autoMerge = true;
+  return o;
+}
+
+// GraphQL PullRequest node to the stored status keys (the same ones statusOf lets through).
+function statusFrom(p) {
+  const o = {};
+  const ci = CI[p.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state];
+  if (ci) o.ci = ci;
+  if (REVIEW[p.reviewDecision]) o.review = REVIEW[p.reviewDecision];
+  // shortcut: first 100 threads only, upgrade to paging if a PR passes 100 review threads
+  if (Array.isArray(p.reviewThreads?.nodes)) o.threads = p.reviewThreads.nodes.filter((t) => t?.isResolved === false).length;
+  if (p.isDraft === true) o.draft = true;
+  if (p.mergeable === 'CONFLICTING') o.mergeable = 'conflict';
+  if (p.autoMergeRequest) o.autoMerge = true;
+  return o;
+}
+
+const QUERY = 'query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){'
+  + 'state title isDraft mergeable reviewDecision autoMergeRequest{enabledAt} '
+  + 'commits(last:1){nodes{commit{statusCheckRollup{state}}}} reviewThreads(first:100){nodes{isResolved}}}}}';
+const GONE = /Could not resolve to a (Repository|PullRequest)/;
+
 // Open PRs and the merged count for the status line's dch meta push, open in
 // insertion order, capped at 50 with titles trimmed so the payload stays small. Old state
 // files carry `open: []`, which means none. Consumers render these as links, so
@@ -91,7 +126,7 @@ export function prMeta(state) {
       .map(([url, pr]) => [parseUrl(url), url, pr])
       .filter(([m]) => m)
       .slice(0, 50)
-      .map(([m, url, pr]) => ({ url, repo: m.repo, num: m.num, title: clean(pr?.title).slice(0, 120) })),
+      .map(([m, url, pr]) => ({ url, repo: m.repo, num: m.num, title: clean(pr?.title).slice(0, 120), ...statusOf(pr) })),
     merged: Number(state.merged) || 0,
   };
 }
@@ -126,16 +161,25 @@ function refresh(sid) {
     if (!ref) { delete state.open[url]; continue; } // a state file edited by hand: never handed to gh
     let info;
     try {
-      // argv only: the number and -R <host/owner/repo> are separate args, neither can start with "-"
-      info = JSON.parse(execFileSync('gh', ['pr', 'view', String(ref.num), '-R', `${ref.host}/${ref.repo}`, '--json', 'state,title'], {
+      // argv only: host, owner, name and number are separate args; parseUrl guarantees none starts with "-".
+      // owner and name go as -f (raw strings): -F would turn an all-digit owner or a repo named "true" into a non-String
+      const [owner, name] = ref.repo.split('/');
+      const out = JSON.parse(execFileSync('gh', ['api', 'graphql', '--hostname', ref.host, '-f', `query=${QUERY}`,
+        '-f', `owner=${owner}`, '-f', `name=${name}`, '-F', `number=${ref.num}`], {
         encoding: 'utf8', timeout: 15_000, stdio: ['ignore', 'pipe', 'pipe'],
       }));
+      if (out.errors?.some((x) => GONE.test(String(x?.message)))) { delete state.open[url]; continue; }
+      info = out.data?.repository?.pullRequest;
+      if (info === null) { delete state.open[url]; continue; } // null pullRequest: no such PR
+      if (!info) continue;
     } catch (e) {
       // GitHub says the repo or PR does not exist: a bogus ref (a test fixture
       // like o/r#12), never coming back, so drop it. Anything else is network
       // down or a timeout: keep it listed, retry next cycle.
-      if (/Could not resolve to a (Repository|PullRequest)/.test(String(e.stderr ?? ''))) delete state.open[url];
-      continue;
+      if (GONE.test(`${e.stderr ?? ''}${e.stdout ?? ''}`)) { delete state.open[url]; continue; }
+      // gh exits 1 on a partial errors[] too: use the PR it still printed, so a merge is counted
+      try { info = JSON.parse(e.stdout).data?.repository?.pullRequest; } catch { /* no JSON: network or timeout */ }
+      if (!info) continue;
     }
     if (info.state === 'MERGED') {
       state.merged = (state.merged ?? 0) + 1;
@@ -145,6 +189,8 @@ function refresh(sid) {
       delete state.open[url]; // closed unmerged is not an achievement, just drop it
     } else {
       pr.title = clean(info.title);
+      for (const k of ['ci', 'review', 'threads', 'draft', 'mergeable', 'autoMerge']) delete pr[k];
+      Object.assign(pr, statusFrom(info));
     }
   }
   state.checkedAt = Date.now();
