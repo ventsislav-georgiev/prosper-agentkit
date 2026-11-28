@@ -15,4 +15,5 @@ and tools pinned in its frontmatter (`worker-haiku` is read-only).
   - `worker-opus-xhigh` / `worker-opus-max`: only an extreme, critical entry; slow and token-heavy.
 - Give the worker everything it needs in the prompt: it does not see this conversation. Name the kit's bin folder
   as `KIT_BIN={{kit_bin}}`: the agent files call the kit's tools through `$KIT_BIN`.
+- Its `description` leads with its tier in brackets, then the ledger project and id — `[opus/high] <project> #<id> Extract the billing module` — so the panel shows the tier and spend-report ties the worker's tokens to the entry. Ask it to claim the entry with `--fork --worker <model>/<effort>` on its first ledger write.
 - Ask it for a short report and a file with the full result, and check that file before you rely on it.

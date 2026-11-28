@@ -18,11 +18,13 @@ def price(model):
 
 
 def ledger_uri():
-    """The kit ledger, read-only, found as todo.py finds it: $LEDGER_DB, else $KIT_STATE_DIR/ledger.sqlite3, else
+    """The kit ledger, read-only, found as todo.py finds it: $LEDGER_DB, else $KIT_LEDGER_DB, else $KIT_STATE_DIR/ledger.sqlite3, else
     $XDG_DATA_HOME (default ~/.local/share)/prosper-agentkit/ledger.sqlite3."""
     e = os.environ
     if e.get("LEDGER_DB"):
         p = e["LEDGER_DB"]
+    elif e.get("KIT_LEDGER_DB"):
+        p = e["KIT_LEDGER_DB"]
     elif e.get("KIT_STATE_DIR"):
         p = os.path.join(e["KIT_STATE_DIR"], "ledger.sqlite3")
     else:

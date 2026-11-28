@@ -80,7 +80,7 @@ export function ledgerEntries(cwd = process.cwd(), name = null) {
   try {
     const project = ledgerProject(db, cwd, name);
     if (!project) return [];
-    return db.prepare(`SELECT entry_id, title, status, last_round, forkable, blocked_by, lane, worker
+    const rows = db.prepare(`SELECT entry_id, title, status, last_round, forkable, blocked_by, lane, worker
                        FROM entries WHERE project = ? AND status != 'DROPPED' ORDER BY ord`)
       .all(project)
       .map((r) => ({
@@ -93,6 +93,8 @@ export function ledgerEntries(cwd = process.cwd(), name = null) {
         lane: r.lane,
         worker: r.worker,
       }));
+    rows.project = project; // the resolved project rides along, so the stats line needs no second open
+    return rows;
   } catch {
     return [];
   } finally {

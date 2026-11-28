@@ -15,18 +15,21 @@ __doc__ = """Spend review from Claude Code transcripts, Prosper's ccpool files a
   spend-report.py compact FILE [SINCE]    what fills one main session's context between compactions
   spend-report.py supervisor FILE SINCE   one session's spend split, its floor after compaction, what it added since
   spend-report.py floor < FILE            startup attachments of a transcript (deferred tools, skills, instructions)
+  spend-report.py entries --since T [--until T] --json [--out FILE]
+                                          worker tokens and $ per ledger entry and tier, each main session's split (JSON;
+                                          T may also be 12h / 7d back)
   spend-report.py selftest                the row-conversion and settings checks
 
 Times are local, 'YYYY-MM-DD HH:MM'. Dollars are API list prices, used only as weights.
 Transcripts: $CLAUDE_CONFIG_DIR/projects, else ~/.claude/projects. ccpool: $PROSPER_CCPOOL_DIR, else
-~/Library/Application Support/Prosper/ccpool. Ledger: $LEDGER_DB as todo.py finds it. Accounts on a smaller plan
+~/Library/Application Support/Prosper/agentpool (ccpool before Prosper's rename). Ledger: $LEDGER_DB as todo.py finds it. Accounts on a smaller plan
 (left out of the account-week totals): the kit setting spend_small_accounts (KIT_SPEND_SMALL_ACCOUNTS)."""
 import os, runpy, sys
 
 CMDS = {"report", "expiry", "byproject", "tokens", "ctxsize", "revive", "points", "accounts", "fit", "compact",
-        "supervisor", "floor", "selftest"}
+        "supervisor", "floor", "entries", "selftest"}
 
-NEED = {"expiry": 2, "byproject": 2, "tokens": 2, "ctxsize": 2, "revive": 1, "compact": 1, "supervisor": 2}
+NEED = {"expiry": 2, "byproject": 2, "tokens": 2, "ctxsize": 2, "revive": 1, "compact": 1, "supervisor": 2, "entries": 2}
 
 if __name__ == "__main__":
     args = sys.argv[1:]

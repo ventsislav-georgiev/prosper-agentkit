@@ -3,16 +3,58 @@
 # on infrastructure rather than on its own code. Exits once the PR is merged or closed.
 #
 # Usage: pr-watch.sh <pr-number|url> [owner/repo] [local-repo-dir]
+#        pr-watch.sh --audit [owner]
+#
+# Exits 0 once merged or closed, 3 when the author owes the next action (named on the last line): new review comments,
+# unresolved threads at the start, a draft, a merge conflict, CI red with a failed step or after the reruns are spent.
+#
+# --audit lists your open PRs (under owner, or everywhere) that are draft, CHANGES_REQUESTED, hold unresolved threads,
+# are DIRTY or red, or have no live watcher (a running `pr-watch.sh <n> <owner/repo>` or `pr-watch.sh <url>`), one
+# line each with every reason. Exits 0 when nothing is owed, 3 otherwise, 1 when the query failed. Kills nothing.
 #
 # Passing a local repo dir enables the last-resort retrigger: an empty commit pushed with plumbing,
 # which is the only retrigger that works when a provider outage killed the runs the merge gate
 # reads. Without it the watcher still reruns jobs, it just cannot escalate.
 #
-# Needs gh, jq, curl. Kit settings ai_reviewer, actions_status_url (KIT_*; the unprefixed env names win).
+# Needs gh, jq, curl. Kit settings ai_reviewer, ai_bounce_marker, actions_status_url (KIT_*; the unprefixed env names win).
 set -uo pipefail
 
+audit() {
+  local owner="${1:-}" rows live url repo num reasons owed=0 total=0
+  # One batched GraphQL search: every state the audit reads rides on the search nodes.
+  rows=$(gh api graphql --paginate -f q="is:pr is:open author:@me archived:false${owner:+ user:$owner}" \
+    -f query='query($q:String!,$endCursor:String){search(query:$q,type:ISSUE,first:50,after:$endCursor){pageInfo{hasNextPage endCursor} nodes{... on PullRequest{url number isDraft mergeStateStatus reviewDecision repository{nameWithOwner} reviewThreads(first:100){nodes{isResolved}} commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}}}' |
+    jq -r '.data.search.nodes[] | select(.url) | [.url, .repository.nameWithOwner, (.number|tostring), ([
+        (if .isDraft then "draft" else empty end),
+        (if .reviewDecision == "CHANGES_REQUESTED" then "CHANGES_REQUESTED" else empty end),
+        ([.reviewThreads.nodes[] | select(.isResolved | not)] | length | select(. > 0) | "\(.) unresolved thread(s)"),
+        (if .mergeStateStatus == "DIRTY" then "DIRTY" else empty end),
+        (if (.commits.nodes[0].commit.statusCheckRollup.state // "") | test("^(FAILURE|ERROR)$") then "red" else empty end)
+      ] | join(", "))] | @tsv') || { echo "audit: the PR query failed; nothing was checked"; return 1; }
+  # owner/repo#n for each running watcher, by its argv: <n> <owner/repo>, or a PR url.
+  live=$(ps -Ao pid,args 2>/dev/null | awk '{for (i = 2; i <= NF; i++) if ($i ~ /pr-watch\.sh$/) {
+      a = $(i + 1); b = $(i + 2)
+      if (match(a, /[^\/]+\/[^\/]+\/pull\/[0-9]+$/)) { split(substr(a, RSTART), p, "/"); print p[1] "/" p[2] "#" p[4] }
+      else if (a ~ /^[0-9]+$/ && b ~ /\//) print b "#" a
+      break }}')
+  while IFS=$'\t' read -r url repo num reasons; do
+    [[ -n "$url" ]] || continue
+    total=$((total + 1))
+    grep -qxF "$repo#$num" <<<"$live" || reasons="${reasons:+$reasons, }no live watcher"
+    [[ -n "$reasons" ]] || continue
+    owed=$((owed + 1))
+    echo "$url  $reasons"
+  done <<<"$rows"
+  echo "audit: $owed of $total open PR(s) owe an action"
+  [[ $owed -eq 0 ]] || return 3
+}
+if [[ "${1:-}" == --audit ]]; then
+  audit "${2:-}"
+  exit
+fi
+
 if [[ $# -lt 1 ]]; then
-  echo "usage: ${0##*/} <pr-number|url> [owner/repo] [local-repo-dir]" >&2
+  echo "usage: ${0##*/} <pr-number|url> [owner/repo] [local-repo-dir] | --audit [owner]" >&2
   exit 64
 fi
 PR="$1"
@@ -32,8 +74,11 @@ AUTOMERGE=${AUTOMERGE:-1}          # 0 to only watch, never merge
 MERGE_METHOD=${MERGE_METHOD:-squash}
 STUCK_POLLS=${STUCK_POLLS:-6}      # ~30 min at the default interval
 ESCALATE_AFTER=${ESCALATE_AFTER:-2} # reruns per head sha before pushing an empty commit
-# The bot whose CHANGES_REQUESTED re-runs only on a push or a `/ai-review` comment.
+# The bot whose CHANGES_REQUESTED re-runs only on a push or a comment starting with `/ai-review`. A value that starts
+# with ^ or ends with $ is a regex (REST logins carry "[bot]", GraphQL drops it); any other value is one exact login.
 AI_REVIEWER=${AI_REVIEWER:-${KIT_AI_REVIEWER:-}}  # empty: every reviewer is treated as a human
+# Text in the first line of the AI reviewer's review when it refuses a PR as too large without reviewing it.
+AI_BOUNCE_MARKER=${AI_BOUNCE_MARKER:-${KIT_AI_BOUNCE_MARKER:-ai-review:too-large}}
 # Status page components.json; empty: no outage hold.
 STATUS_URL=${ACTIONS_STATUS_URL:-${KIT_ACTIONS_STATUS_URL:-}}
 
@@ -144,12 +189,31 @@ heal() {
   if [[ $cooldown -gt 0 ]]; then
     return
   fi
-  if empty_commit; then
+  # A new commit cures only runs that never ran their code; on a real failure it moves the head, dismisses approvals
+  # and restarts the review.
+  if { [[ "${no_checks:-0}" -eq 1 ]] || infra_failure; } && empty_commit; then
     reruns=0
     cooldown=$STUCK_POLLS
     return
   fi
   log "$reason — cannot self-heal (no rerunnable jobs, no local repo dir); needs a human"
+  # A red board that nothing here can clear is the author's next action; a line nobody reads left one red for 17 hours.
+  [[ -n "${ci_bad:-}" ]] && ci_red_exit
+}
+
+ci_red_exit() {
+  local n hint="fix and push"
+  # shortcut: by name only (the checks query carries no link to tell a status from a job); when more statuses join, match on link.
+  hint="edit the PR description (the check reads it) and push or re-run"
+  while IFS= read -r n; do [[ "$n" == *"Required PR information" ]] || hint="fix and push"; done <<<"${ci_bad//,/$'\n'}"
+  log "ending the watch: CI RED on ${sha:0:7}: $ci_bad; $hint"
+  exit 3
+}
+
+# The watch ends with the next action as its last line: a caller learns only that the watch ended.
+owe() {
+  log "ending the watch: $*"
+  exit 3
 }
 
 # What the comments say, not how many there are.
@@ -171,13 +235,40 @@ review_missing_note() {
     cut -c1-300
 }
 
+is_ai_reviewer() {
+  [[ -n "$AI_REVIEWER" && -n "$1" && "$1" != - ]] || return 1
+  if [[ "$AI_REVIEWER" == ^* || "$AI_REVIEWER" == *\$ ]]; then
+    [[ "$1" =~ $AI_REVIEWER ]]
+  else
+    [[ "$1" == "$AI_REVIEWER" ]]
+  fi
+}
+
+# The AI reviewer's own refusal of a PR as too large: a COMMENTED review whose first body line carries the marker, posted
+# once and never edited. Bounced = the AI reviewer's LATEST review has it; a later one without it (/ai-review deep) clears it.
+ai_bounced() {
+  local who first hit=1
+  [[ -n "$AI_REVIEWER" ]] || return 1   # no AI reviewer set: anyone can post the marker text (QA Rkit2048 n1)
+  while IFS=$'\t' read -r who first; do
+    is_ai_reviewer "$who" || continue
+    [[ "$first" == *"$AI_BOUNCE_MARKER"* ]] && hit=0 || hit=1
+  done < <(gh api "repos/$REPO/pulls/$PR_NUM/reviews" --paginate 2>/dev/null |
+    jq -rs '[.[][]|select(.submitted_at)]|sort_by(.submitted_at)[]|[.user.login, ((.body // "")|split("\n")[0])]|@tsv' 2>/dev/null)
+  return $hit
+}
+
 # What re-runs the review when the answers needed no code change.
 retrigger_hint() {
-  if [[ -n "$AI_REVIEWER" && "${cr_author:-}" == "$AI_REVIEWER" ]]; then
-    echo "comment \`/ai-review\` on the PR (the AI reviewer re-runs only on a push or that comment; resolving threads triggers nothing)"
+  if is_ai_reviewer "${cr_author:-}"; then
+    echo "post a comment starting with \`/ai-review\` (the AI reviewer re-runs only on a push or such a comment; resolving threads triggers nothing)"
   else
     echo "request a re-review from ${cr_author:-the reviewer}"
   fi
+}
+
+owes() {
+  author_owes=1
+  owed="$1"
 }
 
 # Every way a PR sits still looks the same from the outside — one line that stops changing — but they are owed to
@@ -191,36 +282,41 @@ stuck_report() {
     # Attempted once per head sha: a repo that refuses the update refuses it every poll, and the refusal is the thing
     # worth saying rather than repeating the attempt.
     if [[ "$updated_sha" == "$sha" ]]; then
-      author_owes=1
-      log "STUCK m: behind base and the branch update did not take — needs a manual rebase"
+      owes "STUCK ${mins}m: behind base and the branch update did not take — rebase or merge the base and push"
     elif gh pr update-branch "$PR" "${R[@]}" >/dev/null 2>&1; then
       updated_sha="$sha"
       log "behind base — branch updated"
     else
       updated_sha="$sha"
-      author_owes=1
-      log "STUCK m: behind base and update-branch was refused — needs a manual rebase"
+      owes "STUCK ${mins}m: behind base and update-branch was refused — rebase or merge the base and push"
     fi
   elif [[ "$mss" == DIRTY ]]; then
-    author_owes=1
-    log "STUCK m: merge conflict with the base branch — no retrigger clears this, needs a human"
+    owes "STUCK ${mins}m: merge conflict with the base branch — merge or rebase and push"
   elif [[ "${unresolved:-0}" -gt 0 ]]; then
-    author_owes=1
-    log "STUCK ${mins}m: waiting on the AUTHOR — ${_rest}, ${unresolved} unresolved thread(s); reply, resolve, then push"
+    owes "STUCK ${mins}m: waiting on the AUTHOR — ${_rest}, ${unresolved} unresolved thread(s); reply, resolve, then push"
   elif [[ "$_rest" == CHANGES_REQUESTED ]]; then
     # A CHANGES_REQUESTED review outlives the comments it was made of: resolving every thread does not dismiss it,
     # only a newer review from the same reviewer does.
-    if [[ -n "${changes_requested_sha:-}" && "$changes_requested_sha" != "-" && "$changes_requested_sha" != "$sha" ]]; then
+    if [[ -n "${changes_requested_sha:-}" && "$changes_requested_sha" != "-" && "$changes_requested_sha" != "$sha" ]] &&
+      is_ai_reviewer "${cr_author:-}"; then
+      # The bot dismisses its own review on a new head; when that fails, nothing but a comment moves it.
+      owes "STUCK ${mins}m: the AI reviewer's CHANGES_REQUESTED outlived the head it was made on; post a comment starting with \`/ai-review\`"
+    elif [[ -n "${changes_requested_sha:-}" && "$changes_requested_sha" != "-" && "$changes_requested_sha" != "$sha" ]]; then
       log "STUCK ${mins}m: waiting on a REVIEWER — every thread resolved and the head moved since the review; the CHANGES_REQUESTED stands until a fresh review dismisses it"
     else
-      author_owes=1
-      log "STUCK ${mins}m: waiting on the AUTHOR — CHANGES_REQUESTED with no unresolved threads left and nothing pushed since; push a change, or re-trigger without one: $(retrigger_hint)"
+      owes "STUCK ${mins}m: waiting on the AUTHOR — CHANGES_REQUESTED with no unresolved threads left and nothing pushed since; push a change, or re-trigger without one: $(retrigger_hint)"
     fi
   elif [[ "$_rest" == REVIEW_REQUIRED ]]; then
     # Red outranks the review state here, because the two lines say opposite things about who is owed and only one of
     # them can be true.
     if [[ -n "$bad" ]]; then
-      log "STUCK ${mins}m: waiting on a REVIEWER, but the board is RED — ${bad}; no review runs against a red head, so nothing moves until it is green"
+      owes "STUCK ${mins}m: the board is RED — ${bad}; fix and push"
+    elif ai_bounced; then
+      # Before the branch below: a bounce is itself a clean-looking COMMENTED review by the bot.
+      owes "STUCK ${mins}m: too large for the AI review: split the PR or post a comment starting with \`/ai-review deep\`"
+    elif [[ "${last_state:-}" == COMMENTED && "${pending:-0}" -eq 0 ]] && is_ai_reviewer "${last_author:-}"; then
+      # Reviewed clean yet never approved: the bot approves only PRs under its size limit.
+      owes "STUCK ${mins}m: the AI review passed but did not approve — over the auto-approve size: split the PR or ask for a human approval"
     else
       log "STUCK ${mins}m: waiting on a REVIEWER — checks are clean and nothing is owed by the author"
     fi
@@ -228,6 +324,12 @@ stuck_report() {
     # No checks at all is not "nothing to fix" — a throttled or dropped webhook leaves a PR with no run to rerun, and
     # only a new commit re-attaches one.
     heal "stuck ${mins}m: $line"
+  elif [[ "${reviewers_pending:-0}" -gt 0 ]]; then
+    # A pending CODEOWNERS "Required reviewers" check is a team's wait, never the author's (not "resolve every thread").
+    log "STUCK ${mins}m: waiting on a CODEOWNERS approval${teams:+ from $teams} — not owed by the author"
+  elif [[ "$mss" == BLOCKED && "$_rest" == APPROVED && -z "${PR_WATCH_HELD_THREADS:-}" ]]; then
+    # Approved and green yet blocked: the branch rule wants every conversation resolved, and the thread count missed one.
+    owes "STUCK ${mins}m: BLOCKED with green checks and an approval — resolve every review thread, then restart the watcher"
   elif [[ "${draft_reviewers:-}" == true\ * ]]; then
     # mergeable_now sets draft_reviewers as a side effect on every poll, so a draft reaches here named.
     log "STUCK ${mins}m: waiting on the AUTHOR — still a draft, nothing to retrigger"
@@ -303,10 +405,11 @@ ci_red_seen=""
 review_missing_seen=""
 prev_unresolved=0
 cr_author="-"
+polled=0
 
 while true; do
-  s=$(gh pr view "$PR" "${R[@]}" --json state,mergeStateStatus,reviewDecision,headRefOid \
-    -q '.state+" "+.mergeStateStatus+" "+(.reviewDecision//"-")+" "+.headRefOid' 2>/dev/null || true)
+  s=$(gh pr view "$PR" "${R[@]}" --json state,mergeStateStatus,reviewDecision,headRefOid,isDraft \
+    -q '.state+" "+.mergeStateStatus+" "+(.reviewDecision//"-")+" "+.headRefOid+" "+(.isDraft|tostring)' 2>/dev/null || true)
   if [[ -z "$s" ]]; then
     # The API being unreachable is not a PR transition.
     query_fails=$((query_fails + 1))
@@ -318,6 +421,8 @@ while true; do
   query_fails=0
   [[ $cooldown -gt 0 ]] && cooldown=$((cooldown - 1))
 
+  is_draft="${s##* }"
+  s="${s% *}"
   new_sha="${s##* }"
   s="${s% *}"
 
@@ -335,29 +440,32 @@ while true; do
   fi
 
   # An empty check list means "nothing attached" only when gh says so.
-  checks=$(gh pr checks "$PR" "${R[@]}" --json name,bucket 2>&1 || true)
+  checks=$(gh pr checks "$PR" "${R[@]}" --json name,bucket,description 2>&1 || true)
   no_checks=0
   [[ "$checks" == *"no checks reported"* ]] && no_checks=1
   bad=$(jq -r '[.[]|select(.bucket=="fail")|.name]|join(",")' <<<"$checks" 2>/dev/null)
   pending=$(jq -r '[.[]|select(.bucket=="pending")]|length' <<<"$checks" 2>/dev/null)
   # Queued JOBS, which is not the same set as pending checks.
   pending_jobs=$(jq -r '[.[]|select(.bucket=="pending")|select(.name|test("Required reviewers")|not)]|length' <<<"$checks" 2>/dev/null)
+  reviewers_pending=$(jq -r '[.[]|select(.bucket=="pending")|select(.name|test("Required reviewers"))]|length' <<<"$checks" 2>/dev/null)
   # CI's verdict without the AI review's own checks.
   ci_bad=$(jq -r '[.[]|select(.bucket=="fail")|select(.name|test("^(ai-)?review / ")|not)|.name]|join(",")' <<<"$checks" 2>/dev/null)
 
   # reviewDecision alone is too coarse to be the review signal. PR_WATCH_HELD_THREADS: comma-separated thread ids
   # (PRRT_...) held open by agreement; they do not count as owed by the author.
   threads=$(gh api graphql \
-    -f query='query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){pullRequest(number:$p){reviews(last:20,states:[CHANGES_REQUESTED]){nodes{commit{oid} author{login}}} latestReview:reviews(last:1){nodes{submittedAt}} reviewThreads(last:100){nodes{id isResolved comments(last:1){nodes{databaseId}}}}}}}' \
+    -f query='query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){pullRequest(number:$p){reviews(last:20,states:[CHANGES_REQUESTED]){nodes{commit{oid} author{login}}} latestReview:reviews(last:1){nodes{submittedAt state author{login}}} reviewThreads(last:100){nodes{id isResolved path opener:comments(first:1){nodes{databaseId author{login}}} comments(last:1){nodes{databaseId}}}}}}}' \
     -F o="${REPO%%/*}" -F n="${REPO##*/}" -F p="$PR_NUM" \
     -q '.data.repository.pullRequest as $pr
         | ((env.PR_WATCH_HELD_THREADS // "") | split(",") | map(select(length > 0))) as $held
         | [$pr.reviewThreads.nodes[]|select(.isResolved==false)|select(.id as $i|($held|index($i))|not)] as $u
-        | "\($u|length) \([$u[].comments.nodes[].databaseId]|max // 0) \($pr.reviews.nodes[-1].commit.oid // "-") \($pr.latestReview.nodes[-1].submittedAt // "-") \($pr.reviews.nodes[-1].author.login // "-")"' 2>/dev/null || true)
+        | ($u|max_by(.opener.nodes[0].databaseId // 0)) as $new
+        | "\($u|length) \([$u[].comments.nodes[].databaseId]|max // 0) \($pr.reviews.nodes[-1].commit.oid // "-") \($pr.latestReview.nodes[-1].submittedAt // "-") \($pr.reviews.nodes[-1].author.login // "-") \($pr.latestReview.nodes[-1].state // "-") \($pr.latestReview.nodes[-1].author.login // "-") \($new.opener.nodes[0].author.login // "-") \($new.path // "-")"' 2>/dev/null || true)
   # A failed query is not "all threads resolved".
-  thread_re='^[0-9]+ [0-9]+ [0-9a-f-]+ [0-9TZ:.-]+ []A-Za-z0-9_.[-]+$'
+  # Then the latest review's state and author, and the newest unresolved thread's opener and path (which may hold spaces).
+  thread_re='^[0-9]+ [0-9]+ [0-9a-f-]+ [0-9TZ:.-]+ []A-Za-z0-9_.[-]+( [A-Z_-]+ []A-Za-z0-9_.[-]+ []A-Za-z0-9_.[-]+ .+)?$'
   if [[ "$threads" =~ $thread_re ]]; then
-    read -r unresolved newest_comment changes_requested_sha latest_review cr_author <<<"$threads"
+    read -r unresolved newest_comment changes_requested_sha latest_review cr_author last_state last_author thread_author thread_path <<<"$threads"
   fi
 
   line="$s ${bad:+failing=$bad}${pending:+ pending=$pending}"
@@ -389,13 +497,30 @@ while true; do
   # transition and not on every poll after it.
   if [[ -n "$ci_bad" && "$ci_bad@$sha" != "$ci_red_seen" ]]; then
     ci_red_seen="$ci_bad@$sha"
-    log "CI RED on ${sha:0:10}: $ci_bad — no AI review runs against a red head (the review workflow skips it as skipped_ci); fix and push, which re-triggers CI and the review together, or rerun the job if it was flaky"
+    log "CI RED on ${sha:0:10}: $ci_bad"
+  fi
+  # CODEOWNERS required reviewers hold a pending check; that wait is a team's, not the author's.
+  teams=$(jq -r '[.[]|select(.bucket=="pending")|(.description // "")|capture("Waiting for an approval from (?<t>@[^ ]+)")|.t]|unique|join(", ")' <<<"$checks" 2>/dev/null)
+  # The description is empty on the real check; the team is in the check run's output summary, fetched once per head.
+  if [[ "${reviewers_pending:-0}" -gt 0 && "$sha" != "${summary_sha:-}" ]]; then
+    summary_sha="$sha"
+    summary_teams=$(gh api "repos/$REPO/commits/$sha/check-runs" --paginate 2>/dev/null |
+      jq -rs '[.[].check_runs[]|select(.name|test("Required reviewers"))|(.output.summary // "")|capture("Waiting for an approval from (?<t>@[^ ]+)";"g")|.t]|unique|join(", ")' 2>/dev/null)
+  fi
+  [[ "${reviewers_pending:-0}" -gt 0 && -n "${summary_teams:-}" ]] && teams="$summary_teams"
+  if [[ -n "$teams" && "$teams@$sha" != "${teams_seen:-}" ]]; then
+    teams_seen="$teams@$sha"
+    log "waiting on a CODEOWNERS approval from $teams — not owed by the author; still watching"
   fi
   # review-missing red means the diff was never reviewed, not that it was reviewed and found wanting.
   if [[ "$bad" == *"review / review-missing"* && "$sha" != "$review_missing_seen" ]]; then
     review_missing_seen="$sha"
     note=$(review_missing_note)
-    log "AI REVIEW MISSING on ${sha:0:10}: ${note:-no review was produced} — once the cause has cleared, comment \`/ai-review\` to re-trigger (a push re-triggers it too)"
+    if [[ "$note" == *skipped_auth* ]]; then
+      log "AI REVIEW MISSING on ${sha:0:10}: ${note} — the reviewer's credential is broken; only the operator can fix the reviewer's login"
+    else
+      log "AI REVIEW MISSING on ${sha:0:10}: ${note:-no review was produced} — once the cause has cleared, post a comment starting with \`/ai-review\` to re-trigger (a push re-triggers it too)"
+    fi
   fi
   # Resolving the last thread moves the state line but starts no run.
   if [[ "${prev_unresolved:-0}" -gt 0 && "${unresolved:-0}" -eq 0 && "$_rest" == CHANGES_REQUESTED && "${changes_requested_sha:-}" == "$sha" ]]; then
@@ -417,6 +542,17 @@ while true; do
 
   case "$s" in MERGED*|CLOSED*) exit 0 ;; esac
 
+  # Owed by the author from the first sight: waiting out a stuck window on these only delayed the news.
+  [[ "$is_draft" == true ]] && owe "draft; mark it ready: gh pr ready $PR_NUM -R $REPO"
+  if [[ "$mss" == DIRTY ]]; then
+    base=$(gh pr view "$PR" "${R[@]}" --json baseRefName -q .baseRefName 2>/dev/null)
+    owe "merge conflict with ${base:-the base branch}; merge or rebase and push"
+  fi
+  if [[ $polled -eq 0 && "${unresolved:-0}" -gt 0 ]]; then
+    owe "${unresolved} unresolved review thread(s) already open, newest by ${thread_author:--} on ${thread_path:--}; fix or answer each, resolve the threads, push, then restart the watcher"
+  fi
+  polled=1
+
   if mergeable_now; then
     ready_step
     command sleep "$INTERVAL"
@@ -427,16 +563,16 @@ while true; do
 
   if [[ -n "$bad" ]] && infra_failure; then
     heal "infrastructure failure (a job failed with no failed step)"
+  elif [[ -n "$ci_bad" ]]; then
+    # A failed step is the code's own failure: no rerun fixes it.
+    ci_red_exit
   elif [[ $stuck -ge $STUCK_POLLS ]]; then
     stuck=0
     author_owes=0
     stuck_report
     # Nothing this watcher can do moves a PR that is waiting on its author, and the caller only ever learns a watch
     # ended — a background command notifies on exit, never on a new line of output.
-    if [[ "$author_owes" == "1" ]]; then
-      log "ending the watch: only the author can move this. Act on the line above, then restart the watcher."
-      exit 3
-    fi
+    [[ "$author_owes" == "1" ]] && owe "$owed"
   fi
 
   command sleep "$INTERVAL"

@@ -24,6 +24,7 @@ import { isatty } from 'node:tty';
 import { pathToFileURL } from 'node:url';
 import { getClaudeConfigDir, kitStateDir } from './lib/config-dir.mjs';
 import { ledgerEntries } from './ledger.mjs';
+import { statsLine } from './stats.mjs';
 import { prHead, prLines, prMeta } from './prs.mjs';
 import { readStdinCache, useStdin } from './stdin-cache.mjs';
 import { omcAnchor } from './worktree-anchor.mjs';
@@ -91,6 +92,10 @@ const PR_HEAD = (process.env.OMC_HUD_PR_HEAD ?? '0') !== '0';
 // `OMC_HUD_PR_MERGED=1` puts it back on the line.
 const PR_MERGED = (process.env.OMC_HUD_PR_MERGED ?? '0') !== '0';
 
+// Kit setting hud_pr_lines (env KIT_HUD_PR_LINES): "0"/"off"/"false"/"no" hides every PR row, the head and the
+// `merged:N` tail. pushMeta still sends meta.prs to dch, and prLines still runs so the state refresh goes on.
+const PR_SHOW = !['0', 'off', 'false', 'no'].includes((process.env.KIT_HUD_PR_LINES ?? '1').trim().toLowerCase());
+
 // Only used to keep task subjects on one row. Claude Code pipes the statusline,
 // so stdout is not a TTY and carries no columns; COLUMNS is inherited from the
 // launching shell and therefore misses a mid-session resize.
@@ -137,7 +142,8 @@ function taskModel(sid) {
   // terminal session's name, for sessions Claude Code never named.
   const sessionName = cache?.session_name ?? process.env.DCH_SESSION ?? null;
   const STATUS = { OPEN: 'pending', 'IN PROGRESS': 'in_progress', DONE: 'completed', PARKED: 'parked' };
-  for (const e of ledgerEntries(projectDir, sessionName)) {
+  const entries = ledgerEntries(projectDir, sessionName);
+  for (const e of entries) {
     if (ids.has(e.id)) continue;
     tasks.push({
       id: e.id, subject: e.title, status: STATUS[e.status] ?? 'pending',
@@ -208,7 +214,7 @@ function taskModel(sid) {
       || (lane(a) === 'fork') - (lane(b) === 'fork')
       || blocked(a) - blocked(b)
       || byOrder(a, b));
-  return { tasks, todo, kind, lane, liveWorkers };
+  return { tasks, todo, kind, lane, liveWorkers, project: entries.project };
 }
 
 // The counts line's numbers. `in progress` is both lanes plus an inferred item —
@@ -247,7 +253,7 @@ function taskLines(sid, m) {
     if (!TASK_COUNTS) return [];
     // The PR summary rides along rather than spending a second line on two
     // numbers; its open rows still render under it.
-    const pr = PR_HEAD ? prHead(sid) : null;
+    const pr = PR_HEAD && PR_SHOW ? prHead(sid) : null;
     return [`${indent}${DIM}tasks ${GREEN}${done}${RESET}${DIM}/${tasks.length}, `
       + `${CYAN}${live}${RESET}${DIM} in progress, ${queued} in queue${RESET}`
       + (pr ? `${DIM}, ${pr}` : '')];
@@ -341,7 +347,9 @@ function panel() {
   const sid = sessionId();
   const m = taskModel(sid);
   pushMeta(sid);
-  return [...taskLines(sid, m), ...prLines(sid, WIDTH, { head: PR_HEAD })];
+  const stats = statsLine(m.project);
+  const pr = prLines(sid, WIDTH, { head: PR_HEAD }); // runs even when hidden: it triggers the state refresh
+  return [...taskLines(sid, m), ...(stats ? [`${DIM}│${RESET} ${DIM}${stats}${RESET}`] : []), ...(PR_SHOW ? pr : [])];
 }
 
 process.stdout.write = (chunk, ...rest) => {
@@ -454,7 +462,7 @@ process.stdout.write = (chunk, ...rest) => {
     // Merged PRs are a running total, not an item, so they belong on the main
     // line next to the other counters rather than above the list of open ones.
     const { merged } = prMeta(sessionId());
-    if (merged && PR_MERGED && !PR_HEAD) s = s.replace(/(\n?)$/, `${DIM} | ${RESET}merged:${GREEN}${merged}${RESET}$1`);
+    if (merged && PR_SHOW && PR_MERGED && !PR_HEAD) s = s.replace(/(\n?)$/, `${DIM} | ${RESET}merged:${GREEN}${merged}${RESET}$1`);
     const lines = panel();
     if (lines.length) {
       s = `${s.replace(/\n$/, '')}\n${lines.join('\n')}`;
@@ -504,7 +512,7 @@ try {
   // No OMC main line here to carry `merged:N`, so the plain head takes it.
   const { merged } = prMeta(sessionId());
   let head = plainHead();
-  if (merged && PR_MERGED && !PR_HEAD) head += `${head ? `${DIM} | ${RESET}` : ''}merged:${GREEN}${merged}${RESET}`;
+  if (merged && PR_SHOW && PR_MERGED && !PR_HEAD) head += `${head ? `${DIM} | ${RESET}` : ''}merged:${GREEN}${merged}${RESET}`;
   const lines = [head, ...panel()].filter(Boolean);
   if (lines.length) origWrite(`${lines.join('\n')}\n`);
 }

@@ -3,7 +3,7 @@ id          = "io.github.ventsislav-georgiev.prosper-agentkit"
 name        = "prosper-agentkit"
 title       = "Prosper Agent Kit"
 description = "Guard hooks, safe defaults and named workers for Claude Code."
-version     = "0.2.11"
+version     = "0.3.0"
 author      = "Ventsislav Georgiev"
 license     = "MIT"
 
@@ -13,6 +13,17 @@ api_level   = 1
 
 [extension.entry]
 main = "init.lua"
+
+# The one command: a window over `todo.py stats --json` (init.lua). It runs todo.py through the ledger-tools shim,
+# so it needs System Access for the kit and the ledger-tools piece on.
+[[contributes.commands]]
+id              = "ledger.stats"
+title           = "Ledger Stats"
+description     = "Velocity of the ledger: closes, cycle time, review fail rate, PRs, trends, per tier and per project."
+mode            = "view"
+icon            = "chart.xyaxis.line"
+keywords        = ["ledger", "stats", "velocity", "todo", "metrics"]
+launches_window = true
 
 [contributes.kit]
 schema   = 1
@@ -338,9 +349,15 @@ allow = [
 
 [[contributes.kit.settings]]
 key     = "ai_reviewer"
-title   = "pr-watch.sh: login of the AI review bot (empty: every reviewer is a person)"
+title   = "pr-watch.sh: login of the AI review bot, or a regex starting with ^ or ending with $ (empty: every reviewer is a person)"
 kind    = "string"
 default = ""
+
+[[contributes.kit.settings]]
+key     = "ai_bounce_marker"
+title   = "pr-watch.sh: text on the first line of the AI review bot's review when it refuses a PR as too large"
+kind    = "string"
+default = "ai-review:too-large"
 
 [[contributes.kit.settings]]
 key     = "actions_status_url"
@@ -388,6 +405,18 @@ default = ""
 key     = "hud_default_effort"
 title   = "hud: the effort every session should run; another one shows as a badge (empty: no badge)"
 kind    = "string"
+default = ""
+
+[[contributes.kit.settings]]
+key     = "hud_pr_lines"
+title   = "hud: show the PR rows in the status line (1 = show, 0 = hide; the PR data still goes to dch either way)"
+kind    = "string"
+default = "1"
+
+[[contributes.kit.settings]]
+key     = "ledger_db"
+title   = "todo.py and the Ledger Stats view: ledger database file (empty: ledger.sqlite3 in the kit's state folder)"
+kind    = "path"
 default = ""
 
 [[contributes.kit.settings]]

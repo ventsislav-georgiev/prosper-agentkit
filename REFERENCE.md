@@ -57,7 +57,30 @@ piece: you can switch any piece off on the install sheet and keep the rest.
   `--expect-version` and refuses a stale one with exit 3, and needs a writer name (`--actor` or `LEDGER_ACTOR`).
   `memory.py` keeps Claude Code memory notes in the same database and rewrites the matching file under
   `~/.claude/projects/<project>/memory/` on every write. The database is `ledger.sqlite3` in the kit's state folder;
-  set `LEDGER_DB` to a file path to use another one. Run either with `--help` for the commands.
+  set `LEDGER_DB` (or `KIT_LEDGER_DB`; `LEDGER_DB` wins) to a file path to use another one. Run either with `--help` for the commands.
+  `todo.py append <project> <id> '<findings>' --kind review --verdict pass|fail [--tier <model>/<effort>|main] --expect-version <v>`
+  records a review gate: `--verdict` is required with `--kind review` and refused with any other kind; `--tier` defaults to the
+  entry's latest dispatch note, then the latest claimed `--worker`, else it is an error; the event payload carries `verdict`, `tier`
+  and a computed `review_round`. `todo.py set-status ... --pr <url>` (repeatable, `<host>/owner/repo/pull/N`, https scheme, or
+  `.../-/merge_requests/N`) records PR URLs in the status event, and PR URLs in `--note` are recorded too; `--worker` is
+  recorded in the status event as well.
+  `todo.py ask <project> <qid> ... --option <text> [--option <text> ...] [--recommend <text|n>]` ends the question
+  body with a fixed block, one line each: `Options:`, then `(1) <text>`, `(2) <text>` in the order given, then
+  `Recommendation: <text>` (a bare number `n` is written `(n)` and must name one of the options). At most 8 options;
+  each option and the recommendation is 1 to 300 characters on one line, else the call is refused and nothing is
+  written. `--recommend` alone writes only the `Recommendation:` line. On an existing question the block is appended
+  after the new `--body` text, so the last block in the body is the current one; questions asked without these flags
+  are unchanged. `todo.py rule <project> <qid> <text> [--expect-version <v>] [--actor <name>]` records a ruling.
+  `todo.py stats (<project> | --all) [--since 7d|YYYY-MM-DD] [--by project|tier|actor] [--json] [--hud] [--spend <file>]`
+  reports velocity over a window, read-only (exit 4 "no ledger at <path>" when the file is missing; nothing is
+  created): closes, lead time (create to final DONE) and cycle time (first IN PROGRESS to final DONE), reopens,
+  dispatches and rounds per closed entry, review fail rate (per tier and review round), parked dwell, question rate
+  and ask-to-ruling time, closes per day and WIP, PRs landed, commits landed (`commits`: distinct `/commit/<sha>` URLs in the final DONE note, a short and a full sha of one commit count once; never estimated; `--hud` shows `N PRs`, `N commits` or `N PRs + M commits`), idle gaps. Bulk closes (one actor, >= 10 DONE within
+  15 minutes) are counted (`closed_sweep`) but left out of the headline `lead_h`/`cycle_h`; `lead_h_all`/`cycle_h_all`
+  keep them. Structured fields (`--kind review` events, status `prs`/`worker`) win over the free-text estimate
+  for the same entry; estimated numbers carry `estimated` counts in `--json` (schema 1) and a `~` in text. `--hud`
+  prints one line; `--spend` merges a spend-report entries file (default `$KIT_STATE_DIR/spend/entries.json`
+  when present, else `spend: null`).
 - `monitors-tools`: three watchers in the kit's bin folder, made to run in the background and left alone. Each prints
   only state changes, so silence means nothing changed, and each says so when its backend is unreachable or its
   subject does not exist rather than going quiet. See Monitors below.
@@ -88,10 +111,10 @@ piece: you can switch any piece off on the install sheet and keep the rest.
   `--root`, else `$CLAUDE_CONFIG_DIR/projects`, else `~/.claude/projects`, and prints built-in tool calls, MCP calls
   per server and per project folder, and Skill calls. It reads only and skips lines that are not JSON.
   `spend-report.py [report] START [END]` is the spend review (see Spend review in README.md); its subcommands are
-  `expiry`, `byproject`, `tokens`, `ctxsize`, `revive`, `points`, `accounts`, `fit`, `compact`, `supervisor`, `floor`
-  and `selftest`, and `spend-report.py` alone prints them. Its modules live in `lib/spend/`. It reads transcripts from
+  `expiry`, `byproject`, `tokens`, `ctxsize`, `revive`, `points`, `accounts`, `fit`, `compact`, `supervisor`, `floor`,
+  `entries` (worker tokens and $ per ledger entry and tier as JSON, for `todo.py stats`; under the kit runner it writes `$KIT_STATE_DIR/spend/entries.json` unless `--out` names a file or `-`) and `selftest`, and `spend-report.py` alone prints them. Its modules live in `lib/spend/`. It reads transcripts from
   `$CLAUDE_CONFIG_DIR/projects` (else `~/.claude/projects`), Prosper's ccpool files from `$PROSPER_CCPOOL_DIR` (else
-  `~/Library/Application Support/Prosper/ccpool`) and the ledger as `todo.py` finds it (`LEDGER_DB` wins), opened
+  `~/Library/Application Support/Prosper/agentpool` (`ccpool` before Prosper's rename)) and the ledger as `todo.py` finds it (`LEDGER_DB` wins), opened
   read-only; a missing ledger is reported, never created. `rules/daily-review-prompt.md` is a daily review prompt to
   give a spend session.
 - `hud`: Claude Code's status line, run with `node` (22.13 or later, for `node:sqlite`). It lists the session's open
@@ -155,9 +178,17 @@ poll every 5 minutes or less and exit when the subject reaches an end state.
   outage, and with a local repo folder
   pushes an empty commit as the last retrigger. It merges the pull request once it is approved, green and has no
   requested reviewer (`AUTOMERGE=0` only watches; `MERGE_METHOD=merge|rebase|squash`, default `squash`). It exits 0
-  when the pull request is merged or closed, and 3 when only the author can move it (new review comments on an
-  unresolved thread, a merge conflict, changes requested), so the exit is the signal. A newer watch of the same pull
-  request stops the older one.
+  when the pull request is merged or closed, and 3 when only the author can move it, with the next action on the last
+  line: new review comments on an unresolved thread, unresolved threads already open when the watch starts, a draft,
+  a merge conflict, CI red with a failed step or after its reruns are spent, changes requested, an approved green
+  head still BLOCKED (a missed thread). With `ai_reviewer` set it also exits 3 when the bot reviewed clean without
+  approving (over its auto-approve size), refused the pull request as too large (`ai_bounce_marker`), or left a
+  CHANGES_REQUESTED on an older head. A pending check waiting on a CODEOWNERS team is named once and watched on. A
+  newer watch of the same pull request stops the older one.
+- `pr-watch.sh --audit [owner]`: one line per open pull request you authored (under `owner`, or everywhere) that is a
+  draft, has changes requested or unresolved threads, is in conflict or red, or has no live watcher (no running
+  `pr-watch.sh <n> <owner/repo>` or `pr-watch.sh <url>`), with every reason; the last line is the count. Exits 0 when
+  nothing is owed, 3 otherwise, 1 when the query failed. It kills nothing.
 - `gh-run-watch.sh <run-id> [owner/repo]` or `gh-run-watch.sh --sha <sha> --workflow <name> [owner/repo]`: one
   GitHub Actions run to its end, with each job's result and the failed step names. The `--sha` form waits for the
   run to be created. Without `owner/repo` it uses the current folder's repo, and it refuses to start (exit 2) when
@@ -199,16 +230,22 @@ poll every 5 minutes or less and exit when the subject reaches an end state.
   `-production`. If you run your own guarded shims, list their absolute folders under `[trusted-shim-dirs]`: a cloud
   CLI found there first on PATH counts as guarded, so the hook allows it by name. Outside the kit prodguard reads
   `~/.config/prodguard/prodguard.conf`.
-- Kit settings on the install sheet: `ai_reviewer` is the login of a review bot that re-reviews only on a push or an
-  `/ai-review` comment, so `pr-watch.sh` names that comment instead of a re-review request. `actions_status_url` is
+- Kit settings on the install sheet: `ai_reviewer` is the login of a review bot that re-reviews only on a push or a
+  comment starting with `/ai-review`, so `pr-watch.sh` names that comment instead of a re-review request. A value
+  that starts with `^` or ends with `$` is a regex, since REST logins carry `[bot]` and GraphQL drops it (an org sets
+  e.g. `^<app>(-[0-9]+)?(\[bot\])?$`); any other value is one exact login. `ai_bounce_marker` (default
+  `ai-review:too-large`) is the text on the first line of that bot's review when it refuses a pull request as too large. `actions_status_url` is
   the GitHub status page's `components.json` API address; with it `pr-watch.sh` holds retriggers during an Actions
   outage. `github_url` is the GitHub web address `slack-say.py` links pull requests to, and `github_owner` lets it
   link `repo#N` without an owner; `jira_url` and `jira_projects` (comma-separated keys) turn those Jira
   keys into links; `slack_header` is the message's first line. `hud_default_model` and `hud_default_effort` are
-  the model name and effort your sessions should run; the `hud` status line shows any other one as a badge.
+  the model name and effort your sessions should run; the `hud` status line shows any other one as a badge. `hud_pr_lines` (default `1`) set to `0` hides the PR
+  rows from the `hud` status line; the hud still pushes the PR data to `dch` (`meta.prs`), so Prosper's own PR view is unaffected.
+  The hud draws no subagent list: that one is Claude Code's own.
   `spend_small_accounts` (comma-separated labels) names the accounts on a smaller plan, which
-  `spend-report.py points` and `accounts` leave out of the account-week totals. All are
-  empty or a plain default until you set them.
+  `spend-report.py points` and `accounts` leave out of the account-week totals. `ledger_db` is the ledger file
+  `todo.py`, `memory.py` and the Ledger Stats view use (it reaches them as `KIT_LEDGER_DB`; `LEDGER_DB` in a shell
+  still wins). All are empty or a plain default until you set them.
 - Switch off any piece you do not want on the install sheet; a piece that needs it goes off with it.
 - Run your own script before or after any hook or tool: put an executable file named `<name>.pre` or `<name>.post` in
   `~/.config/prosper-agentkit/hooks/`. `<name>` is the piece id for a hook or the status line (`killguard-hook`,

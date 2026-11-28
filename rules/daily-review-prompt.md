@@ -13,8 +13,10 @@ sessions) and `spend-report.py ctxsize` (spend by context size), judged against 
 (8) account sizing: `spend-report.py points`, the last 7 days' points (100 = one full account-week) against live
 capacity, and how many full accounts the coming week needs with about 15% headroom (`spend-report.py accounts`);
 (9) startup context: `$KIT_BIN/ctxprobe.sh` in an empty folder and a main project, flag a rise above 1k and find what
-came back (plugins, denied tools, MCP denies, a duplicate worker-rules feed; `$KIT_BIN/usage-audit.py`). Analyze, do
-not just list: what moved, the likely cause, one recommendation at most. A bug in the report scripts goes to the kit;
+came back (plugins, denied tools, MCP denies, a duplicate worker-rules feed; `$KIT_BIN/usage-audit.py`); (10) cost
+per entry and tier: run `$KIT_BIN/spend-report.py entries --since 7d --json` (it writes the
+kit's spend/entries.json) first, then read `$KIT_BIN/todo.py stats --all --since 7d` ($ per closed entry by tier next to the review fail rate).
+Analyze, do not just list: what moved, the likely cause, one recommendation at most. A bug in the report scripts goes to the kit;
 brief the owning session for the rest; a change to the operator's rules or settings is proposed, not made. Report in
 a short table plus a few lines; a quiet day in two lines. Session crons expire after 7 days: recreate it on the last
 run.

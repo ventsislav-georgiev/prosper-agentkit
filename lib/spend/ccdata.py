@@ -1,10 +1,15 @@
 """ccpool data for the spend scripts, from Prosper's ccpool folder: usage/usage-YYYY-MM-DD.jsonl, events/events-YYYY-MM-DD.jsonl
-and state.json, in $PROSPER_CCPOOL_DIR, else ~/Library/Application Support/Prosper/ccpool. Rows come out in one flat
+and state.json, in $PROSPER_CCPOOL_DIR, else ~/Library/Application Support/Prosper/agentpool (ccpool before
+Prosper's rename). Rows come out in one flat
 shape (account label, usage, limits). Reads only.
 """
 import glob, json, os
 
-NEW = os.path.expanduser(os.environ.get("PROSPER_CCPOOL_DIR", "").strip() or "~/Library/Application Support/Prosper/ccpool")
+_SUPPORT = os.path.expanduser("~/Library/Application Support/Prosper")
+# Prosper's Agent Account Pool moved its folder from ccpool to agentpool (Prosper #2012); an older Prosper still has ccpool.
+NEW = os.path.expanduser(os.environ.get("PROSPER_CCPOOL_DIR", "").strip()) or next(
+    (d for d in (os.path.join(_SUPPORT, "agentpool"), os.path.join(_SUPPORT, "ccpool")) if os.path.isdir(d)),
+    os.path.join(_SUPPORT, "agentpool"))
 
 
 def small_accounts():

@@ -28,7 +28,8 @@ silence means nothing changed — and exit 0 on a terminal state. The Monitors s
 REFERENCE.md lists every script.
 
 - `$KIT_BIN/pr-watch.sh <pr> [owner/repo] [local-repo-dir]`: a PR until MERGED/CLOSED; it reruns
-  infrastructure failures itself.
+  infrastructure failures itself, and exits 3 when the author owes the next action (named on its last line).
+  `pr-watch.sh --audit [owner]` lists your open PRs that owe an action or have no live watcher.
 - `$KIT_BIN/gh-run-watch.sh <run-id> [owner/repo]`: one GitHub Actions run to its end.
 - `$KIT_BIN/k8s-deploy-watch.sh <context> <namespace> <deployment>`: a Deployment's ready/desired count.
 
@@ -37,6 +38,12 @@ Rules for monitoring anything, with or without these scripts:
 - Never park a watcher in a session scratchpad — it is wiped between sessions and the watcher dies with it.
 - Re-check watchers are alive every ~5 minutes and restart any that died; a dead monitor is the failure mode.
 - An unreachable backend is not a transition: go quiet, announce the recovery.
+- Open PRs ready for review, never `--draft`, other teams' repos included.
+- Every open PR you authored has a live `pr-watch.sh`: re-arm them after a restart or compaction, and run
+  `pr-watch.sh --audit` on every heartbeat tick and after a restart.
+- Resolve review findings yourself: fix, or decline with evidence, then resolve the thread. Never park a PR on an
+  operator question while it has open threads.
+- A `pr-watch.sh` exit 3 is the next action, not a note. Never pipe a watcher through `tail`: a Monitor shows every line.
 - Extend these scripts rather than writing one-off loops; a new kind of subject earns a new script next to them, documented in the kit's REFERENCE.md.
 
 # Todos — Session List + the Ledger Database
@@ -79,9 +86,9 @@ as a wrong row rather than a silent one.
   round --expect-version <v>` per meaningful step (it numbers and dates the round). A close records
   why it closed and what came out — "Done" alone is not a close.
 - **The merge is the close.** When the PR merges (`pr-watch.sh` exits MERGED, or you see it merge),
-  run `set-status --status DONE --note '<what came out of it>, <url>'` in that same action, before
+  run `set-status --status DONE --note '<what came out of it>' --pr <url> [--pr <url>]` in that same action, before
   moving on: nothing else makes closing the next action, so a landed entry would keep reading IN
-  PROGRESS. Work with no PR closes on its own terminal event (the deploy ran, the operator answered,
+  PROGRESS (todo.py also reads PR URLs from the note; `--pr` is for one the note does not name). Work with no PR closes on its own terminal event (the deploy ran, the operator answered,
   the doc shipped).
 - `todo.py set-parallel <project> <id> 'FORKABLE — <why nothing overlaps>'` or
   `'BLOCKED behind #414 and #399 — <what they share>'`. Ids before the em dash are the blockers and
@@ -157,9 +164,14 @@ reprioritised, and every one stays planned and pending until it is done.
   evidence on disk (the report is a lead, never proof), and check against the entry’s
   done-condition plus what it should have delivered even unstated (tests, guards, scope quietly
   narrowed). Judge a dead worker by its output file, not its stall message. Pass → close stands;
+  record every gate verdict as `todo.py append <project> <id> '<findings>' --kind review --verdict pass|fail --expect-version <v>`:
+  one review event per gate (QA or a second reviewer concurring is a round, not a second verdict);
+  the tier defaults to the entry's last dispatch, give `--tier <model>/<effort>` when the review
+  covers another worker and `--tier main` for your own work. A conditional pass ("pass with
+  required changes") is a fail;
   when the deliverable is a PR, arm `pr-watch.sh` through the Monitor tool in the same action (a
   worker’s backgrounded processes die when it reports; TaskStop the watcher on merge/close). Fail →
-  entry stays IN PROGRESS; re-dispatch the same entry with the critique, the missing evidence, and
+  entry stays IN PROGRESS; re-dispatch the same entry (after the `--verdict fail` review event; the new dispatch note names the new tier) with the critique, the missing evidence, and
   the narrowed search embedded in the prompt — to a fresh worker that reads the previous worker's
   deliverable file. SendMessage to the same worker only within 5 minutes of its report: its prompt
   cache lasts 5 minutes, and waking it later re-writes its whole context, seven times the cost of a
@@ -177,8 +189,9 @@ reprioritised, and every one stays planned and pending until it is done.
 - Every worker and subagent is a named agent `worker-<model>-<effort>` from `~/.claude/agents/`
   (the `workers-rules` piece lists them and why) — never `general-purpose`, never a bare `model`
   parameter. The supervising brain stays on the session model (read it off the HUD,
-  `model:<name>(<effort>)`). The worker’s `description` leads with its tier in brackets —
-  `[opus/high] Extract the billing module` — because the agent panel shows neither. Confirm the pin
+  `model:<name>(<effort>)`). The worker’s `description` leads with its tier in brackets, then the ledger project and id —
+  `[opus/high] <project> #<id> Extract the billing module` —
+  so the panel shows the tier and spend-report ties the worker's tokens to the entry. Confirm the pin
   took with `/tasks`: the row shows model and effort.
 - Model choice — a trial, judged on cost per closed entry and on how often a review fails. Workers
   are half of all spend, and Sonnet 5.5 costs half of Opus 5.5 per token. The tiers are in the
@@ -192,7 +205,7 @@ reprioritised, and every one stays planned and pending until it is done.
     entry is single-file, fully specified and its diff is checkable at a glance; `high` is the redo
     after a `medium` worker's review failed, with the critique and a sharper prompt, never a first
     pick; `xhigh` / `max` only for an extreme, critical entry — rare, slow and token-heavy, never a
-    first pick. Record a failed tier in the round.
+    first pick. A failed tier is recorded by the `--verdict fail` review event (its `--tier`).
   - Splitting the task beats raising effort when the entry is doing two things.
 - Every dispatch appends a note to the entry:
   `todo.py append <project> <id> 'worker spawned via Agent, subagent_type: worker-<model>-<effort>
