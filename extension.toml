@@ -3,12 +3,12 @@ id          = "io.github.ventsislav-georgiev.prosper-agentkit"
 name        = "prosper-agentkit"
 title       = "Prosper Agent Kit"
 description = "Guard hooks, safe defaults and named workers for Claude Code."
-version     = "0.3.1"
+version     = "0.4.0"
 author      = "Ventsislav Georgiev"
 license     = "MIT"
 
 [extension.host]
-min_version = "2.181.0"
+min_version = "2.182.0"
 api_level   = 1
 
 [extension.entry]
@@ -154,9 +154,9 @@ kind = "tools"
 dir  = "tools/spend"
 
 [[contributes.kit.pieces]]
-id          = "hud"
+id          = "dch-bridge"
 kind        = "statusline"
-run         = "hud/hud-compact.mjs"
+run         = "dch-bridge/dch-bridge.mjs"
 interpreter = "node"
 
 [[contributes.kit.pieces]]
@@ -166,7 +166,7 @@ event   = "PostToolUse"
 matcher = "Bash"
 run     = "hooks/prs-add.py"
 timeout = 15
-needs   = ["hud"]
+needs   = ["dch-bridge"]
 
 [[contributes.kit.pieces]]
 id   = "guard-examples"
@@ -394,24 +394,6 @@ key     = "slack_header"
 title   = "slack-say.py: first line of every message"
 kind    = "string"
 default = ":sparkles: _Claude says:_"
-
-[[contributes.kit.settings]]
-key     = "hud_default_model"
-title   = "hud: the model every session should run; another one shows as a badge (empty: no badge)"
-kind    = "string"
-default = ""
-
-[[contributes.kit.settings]]
-key     = "hud_default_effort"
-title   = "hud: the effort every session should run; another one shows as a badge (empty: no badge)"
-kind    = "string"
-default = ""
-
-[[contributes.kit.settings]]
-key     = "hud_pr_lines"
-title   = "hud: show the PR rows in the status line (1 = show, 0 = hide; the PR data still goes to dch either way)"
-kind    = "string"
-default = "1"
 
 [[contributes.kit.settings]]
 key     = "ledger_db"

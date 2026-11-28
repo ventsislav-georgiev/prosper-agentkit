@@ -30,7 +30,7 @@ export function getClaudeConfigDir() {
 }
 
 // The kit's state folder, the same rule as todo.py: KIT_STATE_DIR (set by the kit runner), else the XDG data dir.
-// The ledger database and the HUD's own files (hud/) live here.
+// The ledger database and dch-bridge's PR state (hud/, the folder name kept from the old HUD) live here.
 export function kitStateDir() {
   if (process.env.KIT_STATE_DIR) return process.env.KIT_STATE_DIR;
   return join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'prosper-agentkit');

@@ -51,8 +51,7 @@ Rules for monitoring anything, with or without these scripts:
 Two surfaces, one set of ids: the session task list is the working queue; the ledger is the record
 that survives the session. The ledger is ONE SQLite database for every project, written only
 through `$KIT_BIN/todo.py`; no file is a ledger. Write as work happens, not at the end — a crashed
-session must lose nothing. The kit's `hud` status line renders the rows live, so a wrong write shows
-as a wrong row rather than a silent one.
+session must lose nothing.
 
 ## Which ledger
 
@@ -71,7 +70,7 @@ as a wrong row rather than a silent one.
 - An issue board shared with QA, if you keep one, is a SEPARATE database with its own script and its
   own vocabulary. Rows there, entries here.
 
-## Entry format (the columns the HUD renders)
+## Entry format
 
 - Ids are stable — never renumber, and never reuse an id for different work (two items under one id
   hide whichever closed); a wrong id is closed with the reason, not deleted. The primary key allows
@@ -188,8 +187,7 @@ reprioritised, and every one stays planned and pending until it is done.
   length — drive constant compaction, and a compacting supervisor is not reviewing.
 - Every worker and subagent is a named agent `worker-<model>-<effort>` from `~/.claude/agents/`
   (the `workers-rules` piece lists them and why) — never `general-purpose`, never a bare `model`
-  parameter. The supervising brain stays on the session model (read it off the HUD,
-  `model:<name>(<effort>)`). The worker’s `description` leads with its tier in brackets, then the ledger project and id —
+  parameter. The supervising brain stays on the session model (`/model` shows it). The worker’s `description` leads with its tier in brackets, then the ledger project and id —
   `[opus/high] <project> #<id> Extract the billing module` —
   so the panel shows the tier and spend-report ties the worker's tokens to the entry. Confirm the pin
   took with `/tasks`: the row shows model and effort.

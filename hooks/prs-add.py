@@ -1,9 +1,9 @@
 #!/bin/sh
 ''''exec "${0%"${0##*/}"}../lib/python3" "$0" "$@" # ''' # sh runs this line (lib/python3 picks the interpreter); Python reads a string
-"""PostToolUse hook for Bash: feeds the status line's pull request panel.
+"""PostToolUse hook for Bash: feeds the dch-bridge's pull request state.
 
 When a `gh pr create` command finishes, each pull request URL it printed (https, a host with no user or port, then
-owner, repo, `pull` and a number as the path, no query or fragment) is handed to the hud's `prs.mjs add <session id>`
+owner, repo, `pull` and a number as the path, no query or fragment) is handed to `dch-bridge/prs.mjs add <session id>`
 on stdin. Any host passes, so GitHub Enterprise works. Anything else adds nothing. Always exits 0 and prints nothing.
 PRS_HOOK_NODE names the command that runs prs.mjs (default: node); the rows are tests/prs-hook.test.sh.
 """
@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 
 PATH = re.compile(r"/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+")
 SID = re.compile(r"[A-Za-z0-9-]+")
-PRS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "hud", "prs.mjs")
+PRS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "dch-bridge", "prs.mjs")
 
 
 def pr_url(tok):

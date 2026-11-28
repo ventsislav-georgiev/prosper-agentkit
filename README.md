@@ -5,9 +5,9 @@ A way of working for Claude Code, installed and removed by Prosper as one kit.
 | Part | What it gives the agent |
 |---|---|
 | **Protocol** | a supervisor that hands work to named workers and reviews it, one ledger of work, a heartbeat that keeps the queue moving |
-| **Tracking** | one SQLite database for todos, open questions and memory, shown live in the status line |
+| **Tracking** | one SQLite database for todos, open questions and memory |
 | **Guard rails** | hooks that stop the commands that hurt most when an agent gets them wrong |
-| **Tools** | monitors, an MCP bridge, and tools to measure startup context and spend |
+| **Tools** | monitors, an MCP bridge, a dch bridge, and tools to measure startup context and spend |
 
 - **Where it sits:** Prosper is the Mac app you watch and steer agent sessions from. dch keeps those sessions alive and
   lets agents and scripts drive them. This kit is what each session knows and is allowed to do.
@@ -168,6 +168,13 @@ The session checks its watchers are alive about every 5 minutes.
 
 ### 7. Tools
 
+#### dch bridge
+
+The kit's link from Claude Code to dch. It runs as Claude Code's status line, because that is the hook Claude Code
+calls on every update with the live session. It prints nothing, so no status row is drawn. Each run pushes the
+session's pull requests (open ones and the merged count) to dch with `dch --meta`, where Prosper shows them, and keeps
+their state fresh from `gh` in the background. `prs-hook` adds a pull request when `gh pr create` prints one.
+
 #### MCP bridge
 
 - **Problem:** a laptop that switches networks (Wi-Fi to tethering, a VPN that reconnects) drops in-flight calls to a
@@ -250,9 +257,9 @@ Everything reads only.
 | `worker-rules-hook` | a `SubagentStart` hook that hands your `worker-rules.md`, or the kit's lean-code rules, to every subagent |
 | `lean-code-rules` | the same lean-code rules for your own sessions |
 | `ledger-tools` | `todo.py` and `memory.py` over one SQLite database |
-| `hud` | a status line with tasks, ledger entries and live workers, and a one-line ledger summary (closed, cycle time, review fail rate, PRs, WIP) from `todo.py stats --hud`, cached five minutes |
+| `dch-bridge` | a silent status line that pushes the session's pull requests to dch |
 | `ledger.stats` command | Ledger Stats, a Prosper window over `todo.py stats --json`: KPI tiles, a trends chart, per-tier and per-project tables (needs System Access for the kit and `ledger-tools` on) |
-| `prs-hook` | feeds pull requests from `gh pr create` into the status line |
+| `prs-hook` | feeds pull requests from `gh pr create` to `dch-bridge` |
 | `monitors-tools` | `pr-watch.sh`, `gh-run-watch.sh` and `k8s-deploy-watch.sh` |
 | `killguard-tools`, `-hook`, `-rules` | `safekill`, a hook denying `pkill` and `killall`, and the matching rules |
 | `removeguard-tools`, `-hook`, `-rules` | `saferm`, a hook denying unsafe recursive deletes, and the matching rules |
@@ -273,7 +280,7 @@ Each piece is described in full in [REFERENCE.md](REFERENCE.md#what-it-changes).
 - **Shell tools:** `sh`, `bash`, `python3` and `awk` on PATH; `jq` when present.
   - Python scripts start `/usr/bin/python3` when the Command Line Tools or Xcode back it (skipping a pyenv, asdf or conda
     shim), and `python3` on PATH otherwise.
-- **Status line:** `node` 22.13 or later.
+- **dch bridge:** `node`.
 - **Monitors:** `gh` signed in, `jq` and `curl`, and `kubectl` for `k8s-deploy-watch.sh`.
 
 ## Customise

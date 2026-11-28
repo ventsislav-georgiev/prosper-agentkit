@@ -117,16 +117,16 @@ piece: you can switch any piece off on the install sheet and keep the rest.
   `~/Library/Application Support/Prosper/agentpool` (`ccpool` before Prosper's rename)) and the ledger as `todo.py` finds it (`LEDGER_DB` wins), opened
   read-only; a missing ledger is reported, never created. `rules/daily-review-prompt.md` is a daily review prompt to
   give a spend session.
-- `hud`: Claude Code's status line, run with `node` (22.13 or later, for `node:sqlite`). It lists the session's open
-  tasks and the ledger entries of the current project, read from the kit's ledger database (`LEDGER_DB` wins, as for
-  `todo.py`), with a live-worker count; per-item rows and counts are off until `OMC_HUD_TASK_ROWS=1` or
-  `OMC_HUD_TASK_COUNTS=1`. With the oh-my-claudecode HUD installed (`omc-hud.mjs` in Claude Code's `hud` folder) it
-  restyles that HUD's line and adds the panel below it; without it, it prints the model, effort and context use. Its
-  own files (pull request state, the last `dch --meta` push) live in `hud/` in the kit's state folder. It replaces your
-  status line while it is on; Remove puts yours back.
-- `prs-hook`: a `PostToolUse` hook for `Bash` that feeds the `hud` pull request panel. When a `gh pr create` command
+- `dch-bridge`: the kit's Claude Code to dch integration point, run with `node`. It is Claude Code's status line
+  because that is the hook Claude Code calls on every update with the live session; it prints nothing, so no status
+  row is drawn. Each run pushes the session's pull requests to dch (`dch --meta <DCH_SESSION> '{"prs":{"open":[…],"merged":N}}'`,
+  at most 50 open ones), at once when they change and again every 30 s, so a push dch missed or cleared is repaired.
+  When the pull request state is older than a minute, it asks `gh` for each one's state in the background. It never
+  waits on dch or `gh`. Without `DCH_SESSION` it pushes nothing. Its files (pull request state, the last push) live in
+  `hud/` in the kit's state folder. It replaces your status line while it is on; Remove puts yours back.
+- `prs-hook`: a `PostToolUse` hook for `Bash` that feeds `dch-bridge`. When a `gh pr create` command
   finishes, each pull request URL (https, any host, then owner, repo, `pull` and the number) it printed is added to the
-  session's list; anything else adds nothing. It never blocks and prints nothing. Needs `hud`. A session with no kit PR state takes its list once from the pre-kit HUD file (`~/.claude/hud/prs-<session>.json`) and never changes that file.
+  session's list; anything else adds nothing. It never blocks and prints nothing. Needs `dch-bridge`. A session with no kit PR state takes its list once from the pre-kit HUD file (`~/.claude/hud/prs-<session>.json`) and never changes that file.
 - `guard-examples`: copies `removeguard.conf.example`, `prodguard.conf.example` and
   `settings-recommended.example.json` into the kit's config folder once. They are examples only: the guards read
   `removeguard.conf` and `prodguard.conf`, never the examples, and nothing reads the settings example (see
@@ -206,7 +206,7 @@ poll every 5 minutes or less and exit when the subject reaches an end state.
   script starts Python through `lib/python3`: `/usr/bin/python3 -I` when the Command Line Tools or Xcode back it
   (without them it is a stub that opens an install prompt), else `python3 -I` on PATH. A pyenv, asdf or conda shim
   on PATH adds about 0.3 s to every start, so the hooks skip it when they can.
-- For the `hud` status line: `node` 22.13 or later on PATH.
+- For `dch-bridge`: `node` on PATH.
 - For the monitors: `gh` signed in, `jq` and `curl` (`pr-watch.sh`, `gh-run-watch.sh`) and `kubectl`
   (`k8s-deploy-watch.sh`).
 
@@ -238,10 +238,7 @@ poll every 5 minutes or less and exit when the subject reaches an end state.
   the GitHub status page's `components.json` API address; with it `pr-watch.sh` holds retriggers during an Actions
   outage. `github_url` is the GitHub web address `slack-say.py` links pull requests to, and `github_owner` lets it
   link `repo#N` without an owner; `jira_url` and `jira_projects` (comma-separated keys) turn those Jira
-  keys into links; `slack_header` is the message's first line. `hud_default_model` and `hud_default_effort` are
-  the model name and effort your sessions should run; the `hud` status line shows any other one as a badge. `hud_pr_lines` (default `1`) set to `0` hides the PR
-  rows from the `hud` status line; the hud still pushes the PR data to `dch` (`meta.prs`), so Prosper's own PR view is unaffected.
-  The hud draws no subagent list: that one is Claude Code's own.
+  keys into links; `slack_header` is the message's first line.
   `spend_small_accounts` (comma-separated labels) names the accounts on a smaller plan, which
   `spend-report.py points` and `accounts` leave out of the account-week totals. `ledger_db` is the ledger file
   `todo.py`, `memory.py` and the Ledger Stats view use (it reaches them as `KIT_LEDGER_DB`; `LEDGER_DB` in a shell
@@ -249,7 +246,7 @@ poll every 5 minutes or less and exit when the subject reaches an end state.
 - Switch off any piece you do not want on the install sheet; a piece that needs it goes off with it.
 - Run your own script before or after any hook or tool: put an executable file named `<name>.pre` or `<name>.post` in
   `~/.config/prosper-agentkit/hooks/`. `<name>` is the piece id for a hook or the status line (`killguard-hook`,
-  `removeguard-hook`, `prodguard-hook`, `compactguard-hook`, `worker-rules-hook`, `prs-hook`, `hud`) and the command name for a tool (`safekill`,
+  `removeguard-hook`, `prodguard-hook`, `compactguard-hook`, `worker-rules-hook`, `prs-hook`, `dch-bridge`) and the command name for a tool (`safekill`,
   `saferm`, `gcloud`, `aws`, `kubectl`, `terraform`, `tofu`, `todo.py`, `memory.py`, `pr-watch.sh`, `gh-run-watch.sh`, `k8s-deploy-watch.sh`, `slack-say.py`, `ctxprobe.sh`, `usage-audit.py`, `spend-report.py`). A `.pre`
   that exits non-zero stops the run (exit 2 blocks the tool call for a hook); a `.post` sees
   `KIT_STATUS` and cannot change the output. Prosper runs only a regular file you own that is not group- or
@@ -308,7 +305,7 @@ tool is for: keep the ones you use.
 
 Remove the kit in Prosper. It takes out the import line, the hooks, the status line (your own comes back), the
 permission rules it added, the tools in its bin folder and the agent files it wrote. Your `local.md` stays, and so do
-the three `.example` files, your `removeguard.conf` and `prodguard.conf`, the ledger database and the HUD's files in
+the three `.example` files, your `removeguard.conf` and `prodguard.conf`, the ledger database and `dch-bridge`'s files in
 the kit's state folder, the compaction archives, the memory files `memory.py` wrote, the tokens `mcpbridge` stored in
 `~/.config/mcpbridge/` (`mcpbridge --logout <url>` first removes them), your `.pre` and `.post` scripts, an agent file you edited, and any recommended settings you pasted
 into `~/.claude/settings.json` by hand (take those out yourself).

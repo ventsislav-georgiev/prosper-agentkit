@@ -4,8 +4,8 @@
 // Three entry points, one file:
 //   `prs.mjs add <sid>`      — URLs on stdin, for a hook of your own that sees a PR opened
 //   `prs.mjs refresh <sid>`  — asks gh for each open PR's state, moves merged
-//                              ones into the counter; spawned detached by the HUD
-//   import { prLines }       — renders from the state file only, never blocks
+//                              ones into the counter; spawned detached by the status line
+//   import { load, prMeta, refreshIfStale } — the dch meta push and the refresh trigger, never block
 //
 // State never leaves <kit state>/hud/prs-<sid>.json, so it is per session by
 // construction — no shared-file race like the OMC stdin cache has.
@@ -15,24 +15,10 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getClaudeConfigDir, kitStateDir } from './lib/config-dir.mjs';
 
-const DIM = '\x1b[2m';
-const CYAN = '\x1b[36m';
-const GREEN = '\x1b[32m';
-const RESET = '\x1b[0m';
-const UNDERLINE = '\x1b[4m';
-const NO_UNDERLINE = '\x1b[24m';
-
 const REFRESH_MS = 60_000;
 
-// OSC 8 hyperlink. Ghostty, iTerm2, WezTerm and kitty turn the wrapped text into
-// a clickable link; anything else prints the text alone and drops the escape, so
-// there is no fallback to write. BEL-terminated rather than ST-terminated — the
-// wider of the two conventions. Invisible to the width maths either way, since
-// the visible text is unchanged.
 // Terminal-bound text: C0 and C1 controls (ESC, BEL, CSI ...) must never reach the screen from a gh title or a state file.
 const clean = (s) => String(s ?? '').replace(/[\x00-\x1f\x7f-\x9f]/g, '');
-
-const link = (url, text) => `\x1b]8;;${url}\x07${text}\x1b]8;;\x07`;
 
 const statePath = (sid) => join(kitStateDir(), 'hud', `prs-${sid}.json`);
 
@@ -40,9 +26,15 @@ const statePath = (sid) => join(kitStateDir(), 'hud', `prs-${sid}.json`);
 const SID = /^[0-9A-Za-z-]{1,64}$/;
 const validSid = (sid) => typeof sid === 'string' && SID.test(sid);
 
-function load(sid) {
+export function load(sid) {
   if (!validSid(sid)) return { open: {}, merged: 0 };
-  try { return JSON.parse(readFileSync(statePath(sid), 'utf8')); } catch (e) {
+  try {
+    const s = JSON.parse(readFileSync(statePath(sid), 'utf8'));
+    const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
+    if (!isObj(s)) return { open: {}, merged: 0 }; // a file holding null or a list
+    if (!isObj(s.open)) s.open = {}; // a hand-edited open: add and refresh index into it
+    return s;
+  } catch (e) {
     return e?.code === 'ENOENT' ? importLegacy(sid) : { open: {}, merged: 0 };
   }
 }
@@ -74,31 +66,11 @@ function save(sid, state) {
   } catch { /* best effort */ }
 }
 
-/* ---------- render ---------- */
-// `PR 3 open, 12 merged`, without the indent, or null when there is nothing to
-// say. Split out so the task panel can carry it when its own rows are collapsed
-// to counts and the two summaries share one line.
-export function prHead(sid) {
-  if (!sid) return null;
-  const state = load(sid);
-  const open = Object.keys(state.open ?? {}).length;
-  if (!open && !state.merged) return null;
-  const parts = [
-    open ? `${open} open` : null,
-    state.merged ? `${GREEN}${state.merged}${RESET}${DIM} merged` : null,
-  ].filter(Boolean);
-  return `${DIM}PR ${parts.join(', ')}${RESET}`;
-}
-
-export function prLines(sid, width = 100, { head = true } = {}) {
-  if (!sid) return [];
-  const state = load(sid);
-  const open = Object.entries(state.open ?? {});
-  if (!open.length && !state.merged) return [];
-
-  // Refresh out of band. The HUD must never wait on the network, so the numbers
-  // are up to REFRESH_MS stale — which is fine, a merge is not a per-keystroke
-  // event.
+/* ---------- refresh ---------- */
+// Kicks off a detached `refresh` when the state is older than REFRESH_MS. The status line must never wait on the
+// network, so the numbers are up to REFRESH_MS stale — which is fine, a merge is not a per-keystroke event.
+export function refreshIfStale(sid, state) {
+  if (!validSid(sid) || (!Object.keys(state.open ?? {}).length && !state.merged)) return;
   try {
     if (Date.now() - (state.checkedAt ?? 0) > REFRESH_MS) {
       spawn(process.execPath, [fileURLToPath(import.meta.url), 'refresh', sid], {
@@ -106,40 +78,13 @@ export function prLines(sid, width = 100, { head = true } = {}) {
       }).unref();
     }
   } catch { /* best effort */ }
-
-  const indent = `${DIM}│${RESET} `;
-  // `head: false` when the task panel has taken the summary onto its own counts
-  // line — the open rows below still belong here.
-  const lines = head ? [`${indent}${prHead(sid)}`] : [];
-
-  // Titles start in one column: refs vary in length (`acme/app#22574`
-  // against `acme/backend-service#6867`), so each is padded out to the widest
-  // one in this render. The padding sits OUTSIDE the OSC 8 wrapper, so the
-  // clickable region stays the ref itself and never a run of trailing spaces.
-  // Repo and number come from the URL; a stored url of any other shape is not drawn (it would reach the terminal).
-  const rows = open.map(([url, pr]) => [parseUrl(url), url, pr]).filter(([p]) => p)
-    .map(([p, url, pr]) => ({ url, ref: `${p.repo}#${p.num}`, title: clean(pr?.title) }));
-  if (!rows.length) return lines;
-  const refWidth = Math.max(...rows.map((r) => r.ref.length));
-  const room = width - 8 - refWidth;
-  for (const { url, ref, title } of rows) {
-    const text = title && room > 8
-      ? ` ${title.length > room ? `${title.slice(0, room - 1)}…` : title}`
-      : '';
-    const pad = ' '.repeat(refWidth - ref.length);
-    // Underlined, as Claude Code draws its own PR link in the footer: OSC 8 alone
-    // is invisible until hover, so nothing tells the eye the ref is clickable.
-    lines.push(`${indent}${CYAN}⇡${RESET} ${link(url, `${UNDERLINE}${ref}${NO_UNDERLINE}`)}${pad}${DIM}${text}${RESET}`);
-  }
-  return lines;
 }
 
-// Open PRs and the merged count for the HUD's dch meta push, open in
+// Open PRs and the merged count for the status line's dch meta push, open in
 // insertion order, capped at 50 with titles trimmed so the payload stays small. Old state
 // files carry `open: []`, which means none. Consumers render these as links, so
 // only exact PR URLs pass (parseUrl, any plain host), and repo and num come from the URL itself.
-export function prMeta(sid) {
-  const state = sid ? load(sid) : {};
+export function prMeta(state) {
   const open = state.open && !Array.isArray(state.open) ? Object.entries(state.open) : [];
   return {
     open: open
@@ -168,7 +113,7 @@ function add(sid, urls) {
     // Already tracked, or already counted as merged — re-adding would double it.
     if (pr && !state.open[url] && !(state.mergedUrls ?? []).includes(url)) state.open[url] = { repo: pr.repo, num: pr.num };
   }
-  state.checkedAt = 0; // force the next render to fetch titles
+  state.checkedAt = 0; // force the next status line run to fetch titles
   save(sid, state);
 }
 
