@@ -3,12 +3,12 @@ id          = "io.github.ventsislav-georgiev.prosper-agentkit"
 name        = "prosper-agentkit"
 title       = "Prosper Agent Kit"
 description = "Guard hooks, safe defaults and named workers for Claude Code."
-version     = "0.3.0"
+version     = "0.3.1"
 author      = "Ventsislav Georgiev"
 license     = "MIT"
 
 [extension.host]
-min_version = "2.175.0"
+min_version = "2.181.0"
 api_level   = 1
 
 [extension.entry]
